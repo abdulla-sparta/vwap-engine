@@ -74,6 +74,27 @@ class TradeEngine:
         # VWAP daily reset tracking
         self._last_vwap_date = None
 
+    def _log_entry_block(self, reason: str, candle, vwap_data=None):
+        if not CONFIG.get("entry_debug_logs", False):
+            return
+        try:
+            ts = candle.name.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            ts = str(getattr(candle, "name", "N/A"))
+        close = None
+        try:
+            close = round(float(candle["close"]), 2)
+        except Exception:
+            close = None
+        vwap_val = None
+        if isinstance(vwap_data, dict):
+            vwap_val = vwap_data.get("vwap")
+        print(
+            f"[{self.symbol}] [ENTRY-BLOCK] {reason} | "
+            f"time={ts} bias={self.current_bias or 'NONE'} "
+            f"close={close} vwap={vwap_val}"
+        )
+
     # ── Module attachment ─────────────────────────────────────────────────────
 
     def attach(self, htf_structure, vwap_instance, vwap_entry):
@@ -169,6 +190,7 @@ class TradeEngine:
         # 3. Kill switch block
         if self.kill_switch_triggered:
             if not self.broker.position:
+                self._log_entry_block("kill_switch_triggered", candle, vwap_data)
                 return
 
         # 4. Force exit at session end
@@ -177,34 +199,43 @@ class TradeEngine:
                 self.broker.force_close(price=price, time=candle.name)
             if not self._is_backtest and CONFIG.get("mode") == "live":
                 self._save_state()
+            self._log_entry_block("force_exit_time_reached", candle, vwap_data)
             return
 
         # 5. Session filter — live only
         if not self._is_backtest and CONFIG.get("mode") == "live":
             if not is_entry_allowed(current_time):
                 self._save_state()
+                self._log_entry_block("outside_entry_window", candle, vwap_data)
                 return
 
         # 6. Guards
         if not self.current_bias:
+            self._log_entry_block("no_htf_bias", candle, vwap_data)
             return
         if self.broker.position:
+            self._log_entry_block("position_already_open", candle, vwap_data)
             return
         if (self.index - self.last_entry_index) < self.cooldown_candles:
+            self._log_entry_block("cooldown_active", candle, vwap_data)
             return
         if self.replay_mode:
+            self._log_entry_block("replay_mode_active", candle, vwap_data)
             return
 
         # 7. VWAP Entry signal
         if self.ltf is None or not self.vwap or not self.vwap.is_ready:
+            self._log_entry_block("vwap_not_ready", candle, vwap_data)
             return
         signal = self.ltf.update(candle, self.current_bias, vwap_data)
         if not signal:
+            self._log_entry_block("no_ltf_vwap_signal", candle, vwap_data)
             return
 
         # 8. Price distance filter
         if (self.last_entry_price is not None and
                 abs(signal["entry"] - self.last_entry_price) < self.min_price_distance):
+            self._log_entry_block("min_price_distance_filter", candle, vwap_data)
             return
 
         # 9. Execute trade

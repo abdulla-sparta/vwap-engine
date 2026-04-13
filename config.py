@@ -58,6 +58,7 @@ CONFIG = {
     "cooldown":           20,     # 5m candles between entries
     "min_price_distance": 5,
     "band_confluence":    True,   # reject entries outside 2σ bands
+    "entry_debug_logs":   False,  # print per-candle "why no entry" diagnostics
 
     # ── TIMEFRAMES ────────────────────────────────────────────────────────────
     "htf_minutes":    15,         # HTF for BOS bias
