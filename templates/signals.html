@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VWAP+HTF Engine — Signals</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+<style>
+:root{--bg:#f0f2f5;--surface:#fff;--border:#e2e6ea;--text:#1a1d23;--muted:#6b7280;--blue:#0f6fff;--green:#16a34a;--red:#dc2626;--amber:#d97706;--purple:#7c3aed;--surface2:#f8f9fb}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);font-size:13px;min-height:100vh;display:flex;flex-direction:column}
+.nav{height:48px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:14px;flex-shrink:0;position:sticky;top:0;z-index:100}
+.nav-logo{font-weight:700;font-size:14px;letter-spacing:.5px}
+.nav-badge{background:#e0f2fe;color:#075985;font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;letter-spacing:.5px}
+.nav-sep{width:1px;height:20px;background:var(--border)}
+.nav-tab{padding:6px 12px;border-radius:6px;cursor:pointer;color:var(--muted);font-weight:500;font-size:13px;text-decoration:none;display:inline-flex;align-items:center}
+.nav-tab:hover{background:var(--bg);color:var(--text)}
+.nav-tab.active{background:#f0f4ff;color:var(--blue);font-weight:600}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:#e2e6ea;transition:background .3s}
+.conn-dot.live{background:var(--green);box-shadow:0 0 6px rgba(22,163,74,.5)}
+.conn-label{font-size:11px;color:var(--muted);font-weight:500}
+.nav-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.stats-bar{display:grid;grid-template-columns:repeat(5,1fr);background:var(--surface);border-bottom:1px solid var(--border)}
+.stat-cell{padding:10px 16px;border-right:1px solid var(--border);text-align:center}
+.stat-cell:last-child{border-right:none}
+.stat-label{font-size:10px;color:var(--muted);font-weight:500;letter-spacing:.4px;text-transform:uppercase;margin-bottom:2px}
+.stat-val{font-size:15px;font-weight:700;font-family:'DM Mono',monospace}
+.pos{color:var(--green)}.neg{color:var(--red)}.neu{color:var(--muted)}
+.main{display:grid;grid-template-columns:1fr 270px;flex:1;min-height:0}
+.feed-panel{border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.panel-header{padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;position:sticky;top:48px;z-index:10}
+.panel-title{font-weight:600;font-size:13px}
+.panel-count{margin-left:auto;font-size:11px;color:var(--muted);background:var(--surface2);border:1px solid var(--border);padding:2px 8px;border-radius:10px}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#e2e6ea}
+.live-dot.on{background:var(--green);box-shadow:0 0 6px rgba(22,163,74,.5);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.feed-list{padding:14px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;flex:1}
+.sig-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;animation:slideIn .3s cubic-bezier(.16,1,.3,1);transition:box-shadow .2s}
+.sig-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08)}
+.sig-card.is-new{border-color:var(--blue);border-width:2px}
+@keyframes slideIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+.sig-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border)}
+.sig-sym{font-weight:700;font-size:15px}
+.sig-side{font-size:10px;font-weight:800;padding:2px 8px;border-radius:4px;letter-spacing:.5px}
+.sig-side.BUY{background:#dbeafe;color:#1d4ed8}
+.sig-side.SELL{background:#fee2e2;color:#b91c1c}
+.sig-bias{font-size:10px;font-weight:800;padding:2px 7px;border-radius:4px}
+.sig-bias.BULLISH{background:#dcfce7;color:#15803d}
+.sig-bias.BEARISH{background:#fee2e2;color:#b91c1c}
+.sig-time{margin-left:auto;font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
+.new-badge{font-size:9px;font-weight:700;padding:1px 6px;background:#dbeafe;color:var(--blue);border-radius:3px;letter-spacing:.5px}
+.sig-body{display:grid;grid-template-columns:repeat(5,1fr);border-bottom:1px solid var(--border)}
+.sig-cell{padding:10px 14px;border-right:1px solid var(--border);text-align:center}
+.sig-cell:last-child{border-right:none}
+.sc-label{font-size:10px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px}
+.sc-val{font-size:13px;font-weight:700;font-family:'DM Mono',monospace}
+.sc-val.entry{color:var(--blue)}.sc-val.stop{color:var(--red)}.sc-val.target{color:var(--green)}.sc-val.vwap{color:var(--purple)}
+.sig-foot{display:flex;align-items:center;gap:12px;padding:7px 14px;background:var(--surface2);font-size:11px;color:var(--muted)}
+.sf-item span{color:var(--text);font-weight:600;font-family:'DM Mono',monospace}
+.rr-chip{margin-left:auto;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:#f0f4ff;color:var(--blue);border:1px solid #bfdbfe}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;color:var(--muted);text-align:center;gap:10px}
+.empty-icon{font-size:48px;opacity:.3}
+.empty-title{font-size:15px;font-weight:600;color:var(--text)}
+.empty-sub{font-size:12px;max-width:280px;line-height:1.6}
+/* Side panel */
+.side-panel{background:var(--surface);display:flex;flex-direction:column;overflow-y:auto}
+.side-section{border-bottom:1px solid var(--border);padding:12px 14px}
+.side-title{font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+.eng-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:var(--surface2)}
+.eng-dot{width:7px;height:7px;border-radius:50%;background:#e2e6ea;flex-shrink:0}
+.eng-dot.running{background:var(--green);box-shadow:0 0 5px rgba(22,163,74,.5);animation:pulse 2s infinite}
+.eng-label{font-size:11px;color:var(--muted)}
+.eng-label b{color:var(--text)}
+.btn-sound{width:100%;padding:7px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s}
+.btn-sound:hover{border-color:var(--blue);color:var(--blue)}
+.btn-sound.on{border-color:var(--green);background:#f0fdf4;color:var(--green)}
+.sum-row{display:grid;grid-template-columns:70px 36px 1fr 1fr 1fr;gap:4px;padding:5px 0;border-bottom:1px solid var(--border);font-size:10px;font-family:'DM Mono',monospace;align-items:center}
+.sum-row:last-child{border-bottom:none}
+.sum-hdr{font-family:'DM Sans',sans-serif;font-size:9px;letter-spacing:.5px;color:var(--muted);font-weight:600;text-transform:uppercase}
+/* DB log */
+.db-log-wrap{padding:16px}
+.db-log-section{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.db-log-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);background:var(--surface2);flex-wrap:wrap;gap:8px}
+.db-log-title{font-weight:600;font-size:13px}
+.db-log-controls{display:flex;align-items:center;gap:8px}
+.db-log-count{font-size:11px;color:var(--muted);font-weight:500}
+.db-date-pick{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:'DM Sans',sans-serif;background:var(--surface)}
+.db-refresh-btn{padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;background:var(--surface);font-family:'DM Sans',sans-serif}
+.db-refresh-btn:hover{background:var(--bg)}
+.db-log-table{width:100%;border-collapse:collapse;font-size:12px}
+.db-log-table th{padding:8px 12px;text-align:left;font-size:10px;color:var(--muted);font-weight:700;letter-spacing:.4px;text-transform:uppercase;background:var(--surface2);border-bottom:1px solid var(--border)}
+.db-log-table td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+.db-log-table tr:last-child td{border-bottom:none}
+.db-log-table tr:hover td{background:var(--surface2)}
+.sig-status{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
+.st-fired{background:#dbeafe;color:#1d4ed8}
+.st-filled{background:#dcfce7;color:#16a34a}
+.st-rejected{background:#fee2e2;color:#dc2626}
+.st-missed{background:#fef9c3;color:#854d0e}
+.log-buy{color:var(--green);font-weight:700}
+.log-sell{color:var(--red);font-weight:700}
+.pv{color:var(--green)}.nv{color:var(--red)}
+.toast{position:fixed;bottom:20px;right:20px;background:#1a1d23;color:#fff;padding:10px 16px;border-radius:8px;font-size:12px;font-weight:500;opacity:0;transform:translateY(8px);transition:all .2s;pointer-events:none;z-index:999}
+.toast.show{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <span class="nav-logo">VWAP+HTF ENGINE</span>
+  <span class="nav-badge">LIVE PAPER</span>
+  <div class="nav-sep"></div>
+  <a class="nav-tab" href="/">📈 Backtest</a>
+  <a class="nav-tab" href="/live">⏱ Live</a>
+  <a class="nav-tab active" href="/signals">📡 Signals</a>
+  <a class="nav-tab" href="/trade_log">📋 Trade Log</a>
+  <div class="nav-right">
+    <div class="conn-dot" id="connDot"></div>
+    <span class="conn-label" id="connLabel">Connecting…</span>
+  </div>
+</nav>
+
+<div class="stats-bar">
+  <div class="stat-cell"><div class="stat-label">Signals Today</div><div class="stat-val" id="statTotal">0</div></div>
+  <div class="stat-cell"><div class="stat-label">BUY</div><div class="stat-val pos" id="statBuy">0</div></div>
+  <div class="stat-cell"><div class="stat-label">SELL</div><div class="stat-val neg" id="statSell">0</div></div>
+  <div class="stat-cell"><div class="stat-label">Avg RR</div><div class="stat-val" id="statRR" style="color:var(--blue)">—</div></div>
+  <div class="stat-cell"><div class="stat-label">Last Signal</div><div class="stat-val neu" id="statLast" style="font-size:12px">—</div></div>
+</div>
+
+<div class="main">
+  <div class="feed-panel">
+    <div class="panel-header">
+      <div class="live-dot" id="liveDot"></div>
+      <div class="panel-title">Signal Feed</div>
+      <div class="panel-count" id="feedCount">0 signals</div>
+    </div>
+    <div class="feed-list" id="feedList">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">📡</div>
+        <div class="empty-title">Waiting for signals</div>
+        <div class="empty-sub">Engine fires when price reclaims or rejects VWAP in the direction of HTF bias.</div>
+      </div>
+    </div>
+    <!-- DB log below feed -->
+    <div class="db-log-wrap">
+      <div class="db-log-section">
+        <div class="db-log-header">
+          <div class="db-log-title">📊 Signal Log (DB)</div>
+          <div class="db-log-controls">
+            <span class="db-log-count" id="dbLogCount"></span>
+            <input type="date" class="db-date-pick" id="dbDatePick">
+            <button class="db-refresh-btn" onclick="dbLoad(document.getElementById('dbDatePick').value)">↺ Refresh</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="db-log-table">
+            <thead><tr>
+              <th>Symbol</th><th>Time</th><th>Side</th><th>Entry</th>
+              <th>Stop</th><th>Target</th><th>VWAP</th><th>RR</th><th>Status</th>
+            </tr></thead>
+            <tbody id="dbLogBody"><tr><td colspan="9" class="db-empty" style="text-align:center;padding:20px;color:var(--muted)">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="side-panel">
+    <div class="side-section">
+      <div class="side-title">Engine Status</div>
+      <div class="eng-row"><div class="eng-dot" id="engDot"></div><div class="eng-label" id="engLabel">Not running</div></div>
+      <div class="eng-row"><div class="eng-dot" id="wsDot"></div><div class="eng-label" id="wsLabel">WS disconnected</div></div>
+    </div>
+    <div class="side-section">
+      <div class="side-title">Alert Sound</div>
+      <button class="btn-sound" id="soundBtn" onclick="toggleSound()">🔇 Sound OFF — click to enable</button>
+    </div>
+    <div class="side-section" style="flex:1">
+      <div class="side-title">VWAP Strategy</div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.8">
+        <div>📊 <b style="color:var(--text)">HTF Bias</b> — 15m BOS (Break of Structure)</div>
+        <div>📈 <b style="color:var(--green)">LONG</b> — Price pulls back to VWAP then reclaims it (BULLISH bias)</div>
+        <div>📉 <b style="color:var(--red)">SHORT</b> — Price bounces to VWAP then rejects (BEARISH bias)</div>
+        <div>🛑 <b style="color:var(--text)">Stop</b> — VWAP ±1σ band</div>
+        <div>✅ <b style="color:var(--text)">Filter</b> — Price must be inside 2σ bands</div>
+        <div>🔄 <b style="color:var(--text)">VWAP</b> — Resets daily at 09:15 IST</div>
+      </div>
+    </div>
+    <div class="side-section">
+      <div class="side-title">Recent Signals</div>
+      <div class="sum-row sum-hdr"><span>SYM</span><span>DIR</span><span>ENTRY</span><span>SL</span><span>TGT</span></div>
+      <div id="summaryEl"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const signals = [];
+let soundOn = false;
+
+function playBeep(side) {
+  if (!soundOn) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [[side === 'BUY' ? 880 : 440, 0, .35],[side === 'BUY' ? 1100 : 330, .18, .45]].forEach(([freq, delay, end]) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = freq; o.type = 'sine';
+      g.gain.setValueAtTime(.25, ctx.currentTime + delay);
+      g.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + end);
+      o.start(ctx.currentTime + delay); o.stop(ctx.currentTime + end);
+    });
+  } catch(e) {}
+}
+
+function toggleSound() {
+  soundOn = !soundOn;
+  const btn = document.getElementById('soundBtn');
+  btn.textContent = soundOn ? '🔔 Sound ON' : '🔇 Sound OFF — click to enable';
+  btn.className = 'btn-sound' + (soundOn ? ' on' : '');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function fmt(v) { return v != null ? '₹' + Number(v).toLocaleString('en-IN', {maximumFractionDigits:2}) : '—'; }
+function fmtRaw(v) { return v != null ? Number(v).toLocaleString('en-IN', {maximumFractionDigits:2}) : '—'; }
+
+// ── Live feed cards ──────────────────────────────────────────────────────────
+const seenIds = new Set();
+
+function addSignal(sig, isNew) {
+  const key = (sig.ts || sig.time || '') + (sig.symbol || '') + (sig.side || '');
+  if (seenIds.has(key)) return;
+  seenIds.add(key);
+  signals.unshift(sig);
+
+  document.getElementById('emptyState')?.remove();
+  document.getElementById('liveDot').classList.add('on');
+
+  const card = document.createElement('div');
+  card.className = 'sig-card' + (isNew ? ' is-new' : '');
+  const bias = sig.bias || '';
+  const time = sig.time || String(sig.ts || '').slice(11, 16) || '—';
+  const vwap = sig.vwap ? fmtRaw(sig.vwap) : '—';
+  card.innerHTML = `
+    <div class="sig-head">
+      <span class="sig-sym">${sig.symbol || '—'}</span>
+      <span class="sig-side ${sig.side}">${sig.side || '—'}</span>
+      <span class="sig-bias ${bias}">${bias || 'NO BIAS'}</span>
+      <span class="sig-time">${time}</span>
+      ${isNew ? '<span class="new-badge">NEW</span>' : ''}
+    </div>
+    <div class="sig-body">
+      <div class="sig-cell"><div class="sc-label">Entry</div><div class="sc-val entry">${fmt(sig.entry)}</div></div>
+      <div class="sig-cell"><div class="sc-label">Stop</div><div class="sc-val stop">${fmt(sig.stop)}</div></div>
+      <div class="sig-cell"><div class="sc-label">Target</div><div class="sc-val target">${fmt(sig.target)}</div></div>
+      <div class="sig-cell"><div class="sc-label">VWAP</div><div class="sc-val vwap">₹${vwap}</div></div>
+      <div class="sig-cell"><div class="sc-label">Qty</div><div class="sc-val">${sig.qty || '—'}</div></div>
+    </div>
+    <div class="sig-foot">
+      <span class="sf-item">RR <span>1:${sig.rr || '—'}</span></span>
+      <span class="sf-item">Bias <span>${bias || '—'}</span></span>
+    </div>`;
+  const list = document.getElementById('feedList');
+  list.insertBefore(card, list.firstChild);
+
+  if (isNew) {
+    playBeep(sig.side);
+    showToast(`📡 ${sig.symbol} ${sig.side} @ ₹${sig.entry}`);
+  }
+
+  updateStats();
+  updateSummary();
+  document.getElementById('feedCount').textContent = signals.length + ' signal' + (signals.length === 1 ? '' : 's');
+}
+
+function updateStats() {
+  const buys  = signals.filter(s => s.side === 'BUY').length;
+  const sells = signals.filter(s => s.side === 'SELL').length;
+  const rrs   = signals.filter(s => s.rr).map(s => Number(s.rr));
+  const avgRR = rrs.length ? (rrs.reduce((a,b) => a+b, 0) / rrs.length).toFixed(1) : '—';
+  document.getElementById('statTotal').textContent = signals.length;
+  document.getElementById('statBuy').textContent   = buys;
+  document.getElementById('statSell').textContent  = sells;
+  document.getElementById('statRR').textContent    = avgRR !== '—' ? '1:' + avgRR : '—';
+  const last = signals[0];
+  document.getElementById('statLast').textContent  = last ? (last.symbol + ' ' + last.side) : '—';
+}
+
+function updateSummary() {
+  const el = document.getElementById('summaryEl');
+  el.innerHTML = signals.slice(0, 8).map(s => `
+    <div class="sum-row">
+      <span style="font-weight:600">${s.symbol||'—'}</span>
+      <span class="${s.side==='BUY'?'log-buy':'log-sell'}">${s.side==='BUY'?'▲':'▼'}</span>
+      <span>${fmtRaw(s.entry)}</span>
+      <span class="nv">${fmtRaw(s.stop)}</span>
+      <span class="pv">${fmtRaw(s.target)}</span>
+    </div>`).join('');
+}
+
+function setEngine(state) {
+  const dot   = document.getElementById('engDot');
+  const label = document.getElementById('engLabel');
+  if (state === 'running') {
+    dot.className = 'eng-dot running';
+    label.innerHTML = '<b>Engine running</b>';
+  } else {
+    dot.className = 'eng-dot';
+    label.innerHTML = 'Not running';
+  }
+}
+
+function setWS(connected) {
+  const dot   = document.getElementById('wsDot');
+  const label = document.getElementById('wsLabel');
+  const cdot  = document.getElementById('connDot');
+  const clabel = document.getElementById('connLabel');
+  if (connected) {
+    dot.className = 'eng-dot running';
+    label.innerHTML = '<b>WS connected</b>';
+    cdot.className  = 'conn-dot live';
+    clabel.textContent = 'Live';
+  } else {
+    dot.className = 'eng-dot';
+    label.innerHTML = 'WS disconnected';
+    cdot.className  = 'conn-dot';
+    clabel.textContent = 'Disconnected';
+  }
+}
+
+// ── DB Signal Log ─────────────────────────────────────────────────────────────
+function dbLoad(date) {
+  const url  = '/api/signals' + (date ? '?date=' + date : '');
+  const body = document.getElementById('dbLogBody');
+  const cnt  = document.getElementById('dbLogCount');
+  body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:16px;color:var(--muted)">Loading…</td></tr>';
+  fetch(url).then(r => r.json()).then(data => {
+    // API returns { signals: [...] }
+    const sigs = Array.isArray(data) ? data : (data?.signals || []);
+    cnt.textContent = sigs.length + ' signal' + (sigs.length === 1 ? '' : 's');
+    if (!sigs.length) {
+      body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted)">No signals for this date</td></tr>';
+      return;
+    }
+    // Also push to live feed (non-alert, no duplicate)
+    [...sigs].reverse().forEach(s => addSignal(s, false));
+
+    const statusMap = {fired:'📋 Fired', filled:'✅ Filled', rejected:'🚫 Rejected', missed:'⏰ Missed'};
+    body.innerHTML = sigs.map(s => {
+      const sc = 'st-' + (s.status || '');
+      const sl = s.side === 'BUY' ? 'log-buy' : 'log-sell';
+      const st = statusMap[s.status] || s.status || '—';
+      return `<tr>
+        <td style="font-weight:700">${s.symbol||'—'}</td>
+        <td style="font-family:monospace;color:var(--muted)">${s.time||String(s.ts||'').slice(11,16)||'—'}</td>
+        <td class="${sl}">${s.side||'—'}</td>
+        <td>₹${fmtRaw(s.entry)}</td>
+        <td class="nv">₹${fmtRaw(s.stop)}</td>
+        <td class="pv">₹${fmtRaw(s.target)}</td>
+        <td style="color:var(--purple)">₹${s.vwap ? fmtRaw(s.vwap) : '—'}</td>
+        <td style="color:var(--blue)">${s.rr ? '1:' + s.rr : '—'}</td>
+        <td><span class="sig-status ${sc}">${st}</span></td>
+      </tr>`;
+    }).join('');
+  }).catch(e => {
+    body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--red)">Error: ${e}</td></tr>`;
+  });
+}
+
+// Init date picker with IST date
+(function initDb() {
+  const fmt = d => {
+    const ist = new Date(d.getTime() + (5 * 60 + 30) * 60000);
+    return ist.toISOString().slice(0, 10);
+  };
+  const today = new Date();
+  const todayStr = fmt(today);
+  document.getElementById('dbDatePick').value = todayStr;
+  document.getElementById('dbDatePick').addEventListener('change', function() { dbLoad(this.value); });
+  fetch('/api/signals?date=' + todayStr).then(r => r.json()).then(data => {
+    const sigs = Array.isArray(data) ? data : (data?.signals || []);
+    if (sigs.length > 0) {
+      dbLoad(todayStr);
+    } else {
+      const yday = new Date(today); yday.setDate(yday.getDate() - 1);
+      const ydayStr = fmt(yday);
+      document.getElementById('dbDatePick').value = ydayStr;
+      dbLoad(ydayStr);
+    }
+  }).catch(() => dbLoad(todayStr));
+})();
+
+// ── SocketIO ──────────────────────────────────────────────────────────────────
+const socket = io();
+
+socket.on('connect', () => {
+  document.getElementById('connDot').classList.add('live');
+  document.getElementById('connLabel').textContent = 'Connected';
+  fetch('/live_status').then(r => r.json()).then(d => {
+    if (d.connected) {
+      setEngine('running');
+      setWS(true);
+    }
+  }).catch(() => {});
+});
+
+socket.on('disconnect', () => setWS(false));
+
+socket.on('signal_fired', sig => {
+  addSignal(sig, true);
+  dbLoad(document.getElementById('dbDatePick').value);
+});
+
+socket.on('signal_history', sigs => {
+  [...sigs].reverse().forEach(s => addSignal(s, false));
+});
+
+socket.on('engine_started', data => {
+  setEngine('running');
+});
+
+socket.on('engine_stopped', () => setEngine('stopped'));
+
+socket.on('live_update', data => {
+  if (data.connected !== undefined) setWS(data.connected);
+  if (data.connected) setEngine('running');
+});
+</script>
+</body>
+</html>
