@@ -188,8 +188,8 @@ def auth_callback():
     if not code:
         return "No auth code", 400
     try:
-        from upstox_auth import exchange_code
-        token = exchange_code(code)
+        from upstox_auth import exchange_code_for_token
+        token = exchange_code_for_token(code)
         CONFIG["upstox_access_token"] = token
         return redirect("/live")
     except Exception as e:
