@@ -1,6 +1,13 @@
 # engine/scheduler.py
+#
+# DailyScheduler — called on every live LTF candle.
+# Handles: force-exit, EOD reporting, daily stat reset.
+#
+# Reclassification (tier_classifier) removed — not used in VWAP+HTF engine.
 
+import threading
 from datetime import date, datetime, timezone, timedelta, time as _time
+
 from engine.session import is_force_exit_time
 from engine.reporter import generate_daily_report
 from engine.persistence import save_daily_trades
@@ -9,46 +16,42 @@ from engine.monthly_reporter import (
     generate_monthly_equity_chart,
     is_last_trading_day,
 )
-from config import CONFIG, INSTRUMENTS
-
-
-def _is_sunday(today) -> bool:
-    return today.weekday() == 6   # 0=Mon … 6=Sun
+from config import CONFIG
 
 
 class DailyScheduler:
     """
     Called every LTF candle in live mode.
-    Handles end-of-day force-exit, reporting, and daily stat reset.
+    Handles end-of-day force-exit, EOD reporting, and daily stat reset.
     """
 
     def __init__(self, broker, symbol: str = ""):
-        self.broker                  = broker
-        self.symbol                  = symbol
-        self.last_report_date        = None
-        self.last_reclassify_sunday  = None   # track Sunday reclassification
+        self.broker           = broker
+        self.symbol           = symbol
+        self.last_report_date = None
 
     def check(self, candle_time, current_price: float):
 
         current_time = candle_time.time()
         today        = candle_time.date()
 
-        # Force exit any open position at session end
+        # ── Force exit open position at session end ───────────────────────────
         if is_force_exit_time(current_time) and self.broker.position:
             self.broker.force_close(price=current_price, time=candle_time)
 
-        # Daily report — run exactly once per day, only during real EOD window.
-        # The IST wall-clock guard prevents false fires during startup replay
-        # when gap-fill candles with 15:25 timestamps are processed at 9 AM.
-        _IST = timezone(timedelta(hours=5, minutes=30))
-        _real_ist = datetime.now(_IST).time()
-        _in_eod_window = _time(15, 20) <= _real_ist <= _time(16, 0)
+        # ── Daily EOD report ──────────────────────────────────────────────────
+        # Guard: only run during real IST EOD window (15:20–16:00).
+        # Prevents false fires when startup replay processes old 15:25 candles.
+        _IST        = timezone(timedelta(hours=5, minutes=30))
+        _real_ist   = datetime.now(_IST).time()
+        _in_eod_win = _time(15, 20) <= _real_ist <= _time(16, 0)
 
-        if is_force_exit_time(current_time) and self.last_report_date != today and _in_eod_window:
+        if (is_force_exit_time(current_time)
+                and self.last_report_date != today
+                and _in_eod_win):
 
             report = generate_daily_report(self.broker, self.symbol)
 
-            # Persist trades to CSV
             save_daily_trades(
                 trade_log=self.broker.trade_log,
                 symbol=self.symbol,
@@ -64,7 +67,7 @@ class DailyScheduler:
                         report=report,
                     )
                 except Exception as e:
-                    print(f"Telegram error: {e}")
+                    print(f"[Scheduler] Telegram error: {e}")
 
             # Monthly report on last trading day of month
             if is_last_trading_day(today):
@@ -96,28 +99,7 @@ class DailyScheduler:
                                 caption=f"📊 Monthly Equity — {self.symbol}",
                             )
                     except Exception as e:
-                        print(f"Monthly Telegram error: {e}")
+                        print(f"[Scheduler] Monthly Telegram error: {e}")
 
             self.broker.reset_daily_stats()
             self.last_report_date = today
-
-        # ── Sunday reclassification ───────────────────────────────────────────
-        # Every Sunday at 15:30 (after market) — re-run classification backtest
-        # for all instruments so tier assignments stay current.
-        # Only runs once per Sunday regardless of how many symbols are live.
-        if (_is_sunday(today)
-                and current_time.hour == 15
-                and current_time.minute >= 30
-                and self.last_reclassify_sunday != today):
-            self.last_reclassify_sunday = today
-            import threading
-            def _reclassify():
-                try:
-                    from tier_classifier import reclassify_all
-                    syms = [i["symbol"] for i in INSTRUMENTS]
-                    print(f"[Scheduler] Sunday reclassification started for {len(syms)} symbols")
-                    reclassify_all(syms)
-                    print("[Scheduler] Sunday reclassification complete")
-                except Exception as e:
-                    print(f"[Scheduler] Reclassification error: {e}")
-            threading.Thread(target=_reclassify, daemon=True).start()
