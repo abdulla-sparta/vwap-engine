@@ -27,7 +27,8 @@ _bt_progress = {
 }
 
 _fetch_status = {
-    "running": False, "done": True, "total": 0, "done_count": 0, "symbols": {}
+    "running": False, "done": True, "total": 0, "done_count": 0,
+    "results": {}, "errors": {}
 }
 
 
@@ -254,13 +255,15 @@ def refetch_all_route():
     if not token:
         _fetch_status = {
             "running": False, "done": True, "total": len(symbols), "done_count": 0,
-            "symbols": {s: {"status": "failed", "error": "No Upstox token"} for s in symbols},
+            "results": {s: "failed" for s in symbols},
+            "errors": {s: "No Upstox token" for s in symbols},
         }
         return jsonify({"status": "error", "reason": "no_token"}), 400
 
     _fetch_status = {
         "running": True, "done": False, "total": len(symbols), "done_count": 0,
-        "symbols": {s: {"status": "fetching"} for s in symbols},
+        "results": {s: "fetching" for s in symbols},
+        "errors": {},
     }
 
     def _worker(target_symbols: list[str], access_token: str):
@@ -271,14 +274,16 @@ def refetch_all_route():
         for sym in target_symbols:
             inst = inst_by_symbol.get(sym)
             if not inst:
-                _fetch_status["symbols"][sym] = {"status": "failed", "error": "Unknown symbol"}
+                _fetch_status["results"][sym] = "failed"
+                _fetch_status["errors"][sym] = "Unknown symbol"
                 _fetch_status["done_count"] += 1
                 continue
             try:
                 ok = fetch_symbol(sym, inst["token"], access_token, force=False)
-                _fetch_status["symbols"][sym] = {"status": "ok" if ok else "failed"}
+                _fetch_status["results"][sym] = "ok" if ok else "failed"
             except Exception as e:
-                _fetch_status["symbols"][sym] = {"status": "failed", "error": str(e)}
+                _fetch_status["results"][sym] = "failed"
+                _fetch_status["errors"][sym] = str(e)
             _fetch_status["done_count"] += 1
 
         _fetch_status["running"] = False
@@ -290,7 +295,12 @@ def refetch_all_route():
 
 @app.route("/fetch_status")
 def fetch_status_route():
-    return jsonify(_fetch_status)
+    status = dict(_fetch_status)
+    if "results" not in status:
+        symbols = status.get("symbols", {})
+        status["results"] = {k: (v.get("status") if isinstance(v, dict) else str(v)) for k, v in symbols.items()}
+    status.setdefault("errors", {})
+    return jsonify(status)
 
 
 # ── Backtest API ──────────────────────────────────────────────────────────────
