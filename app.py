@@ -355,7 +355,7 @@ def api_run_backtest():
                 "run_time": _dt.now().strftime("%Y-%m-%d %H:%M"),
                 "config":   preset,
                 "summary":  {r["symbol"]: {k: r.get(k) for k in
-                    ["return_pct","net_pnl","trades","win_rate","balance"]}
+                    ["return_pct","net_pnl","gross_pnl","charges","trades","win_rate","balance","tier"]}
                     for r in results if r.get("symbol")},
             })
         except Exception as e:
@@ -368,6 +368,14 @@ def api_run_backtest():
 @app.route("/bt_progress")
 def bt_progress_route():
     return jsonify(_bt_progress)
+
+@app.route("/api/bt_last_run")
+def api_bt_last_run():
+    meta = db.get("bt_last_run_meta") or {}
+    # Frontend expects `symbols`; keep `summary` for backward compatibility.
+    if "symbols" not in meta:
+        meta["symbols"] = meta.get("summary", {})
+    return jsonify(meta)
 
 
 # ── Live instrument management ────────────────────────────────────────────────
