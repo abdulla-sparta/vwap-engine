@@ -637,14 +637,20 @@ function runBT(){
   $('psDone').textContent  = '0';
   $('progPct').textContent = '0%';
   $('progBar').style.width = '0%';
+  _restoredForRun = false;
   startPollProgress();
   fetch('/run_backtest',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({...cfg, symbols:[...selectedSyms]})})
   .then(r=>r.json()).then(data=>{
-    allResults=data; activeConf='Custom';
+    if(data && data.status==='started'){
+      setStatus('running','⏳ Backtest started — waiting for completion…',true);
+      return;
+    }
+    // Backward compatibility for older synchronous response shape.
+    allResults=data||{}; activeConf='Custom';
     renderTable('Custom');
     $('btnRun').disabled=false; $('btnRun').textContent='▶ Run Backtest';
-    const n=(data['Custom']||[]).filter(r=>!r.error).length;
+    const n=(allResults['Custom']||[]).filter(r=>!r.error).length;
     setStatus('done','✅ Backtest complete — '+n+' symbols · sorted by Return %');
     toast('✅ Done! '+n+' symbols backtested');
   }).catch(e=>{
@@ -832,6 +838,7 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeTLBtn(); });
 /* ── SOCKET PROGRESS ── */
 const socket = typeof io!=='undefined' ? io() : null;
 let _progVisible = false;
+let _restoredForRun = false;
 if(socket) socket.on('bt_progress', data=>updateProgPanel(data));
 
 let _pollTimer = null;
@@ -873,9 +880,39 @@ function updateProgPanel(data){
     return`<div class="prog-sym-row ${rowClass}"><div class="ps-dot ${dotClass}"></div><span class="ps-sym">${sym}</span>${tradeInfo}<span class="ps-ret ${rc}">${rv}</span></div>`;
   }).join('');
   $('progFooter').textContent=data.running?`${done}/${total} done`:`✅ ${okList.length} ok · ${errList.length} failed · 100% complete`;
+  if(!data.running && done===total && total>0 && !_restoredForRun){
+    _restoredForRun = true;
+    restoreLastBacktest(true);
+  }
 }
 
 function closeProgPanel(){ $('progPanel').classList.remove('show'); _progVisible=false; }
+
+function restoreLastBacktest(showToast=true){
+  return fetch('/api/bt_last_run').then(r=>r.json()).then(meta=>{
+    if(!meta||!meta.symbols) return false;
+    const rows = Object.entries(meta.symbols).map(([sym,s])=>({
+      symbol:     sym,
+      balance:    s.balance||200000,
+      return_pct: s.return_pct||0,
+      net_pnl:    s.net_pnl||0,
+      gross_pnl:  s.gross_pnl||0,
+      charges:    s.charges||0,
+      trades:     s.trades||0,
+      win_rate:   s.win_rate||0,
+      tier:       s.tier,
+      trade_log:  s.trade_log||[],
+    }));
+    allResults = {'Custom': rows};
+    fetchDone = true;
+    $('btnRun').disabled = false;
+    setStep(3);
+    renderTable('Custom');
+    setStatus('done', `✅ Backtest complete — ${rows.filter(r=>r.trades>0).length} symbols with trades`);
+    if(showToast) toast('📊 Backtest results loaded');
+    return true;
+  }).catch(()=>false);
+}
 
 /* ── INIT ── */
 document.querySelectorAll('.sym-check:checked').forEach(cb=>{
@@ -888,29 +925,7 @@ fetch('/locked_config').then(r=>r.json()).then(c=>{
 // Restore last backtest results from server on page load
 fetch('/bt_progress').then(r=>r.json()).then(data=>{
   if(!data||data.running||!data.symbols||data.done===0) return;
-  // Reconstruct allResults from bt_progress for table render
-  fetch('/api/bt_last_run').then(r=>r.json()).then(meta=>{
-    if(!meta||!meta.symbols) return;
-    const rows = Object.entries(meta.symbols).map(([sym,s])=>({
-      symbol:     sym,
-      balance:    s.balance||200000,
-      return_pct: s.return_pct||0,
-      net_pnl:    s.net_pnl||0,
-      gross_pnl:  s.gross||0,
-      charges:    s.charges||0,
-      trades:     s.trades||0,
-      win_rate:   s.win_rate||0,
-      tier:       s.tier,
-      trade_log:  [],
-    }));
-    allResults = {'Custom': rows};
-    fetchDone = true;
-    $('btnRun').disabled = false;
-    setStep(3);
-    renderTable('Custom');
-    setStatus('done', `✅ Last backtest restored — ${rows.filter(r=>r.trades>0).length} symbols with trades`);
-    toast('📊 Last backtest results restored');
-  }).catch(()=>{});
+  restoreLastBacktest(false);
 }).catch(()=>{});
 
 updateSelCount();

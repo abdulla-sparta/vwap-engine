@@ -26,6 +26,12 @@ _bt_progress = {
     "running": False, "config": "", "total": 0, "done": 0, "symbols": {},
 }
 
+_fetch_status = {
+    "running": False, "done": True, "total": 0, "done_count": 0,
+    "results": {}, "errors": {}
+}
+_classify_status = {"done": True, "results": {}}
+
 
 # ── JSON sanitiser (strips pandas Timestamps) ─────────────────────────────────
 def _sanitize(obj):
@@ -188,9 +194,11 @@ def auth_callback():
     if not code:
         return "No auth code", 400
     try:
-        from upstox_auth import exchange_code_for_token
+        from upstox_auth import exchange_code_for_token, save_token
         token = exchange_code_for_token(code)
-        CONFIG["upstox_access_token"] = token
+        if not token:
+            return "Token exchange failed", 500
+        save_token(token)
         return redirect("/live")
     except Exception as e:
         return f"Token exchange failed: {e}", 500
@@ -218,6 +226,82 @@ def signals_page():
 @app.route("/trade_log")
 def trade_log_page():
     return render_template("trade_log.html")
+
+
+# ── History fetch API (Backtest step 2) ───────────────────────────────────────
+
+def _resolve_upstox_token() -> str:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    token = os.getenv("UPSTOX_ACCESS_TOKEN", "") or CONFIG.get("upstox_access_token", "")
+    if token:
+        return token
+    try:
+        from upstox_auth import load_token_from_db
+        token = load_token_from_db() or ""
+        if token:
+            CONFIG["upstox_access_token"] = token
+        return token
+    except Exception:
+        return ""
+
+
+@app.route("/refetch_all", methods=["POST"])
+def refetch_all_route():
+    global _fetch_status
+    payload = request.get_json(silent=True) or {}
+    symbols = payload.get("symbols") or [i["symbol"] for i in INSTRUMENTS]
+
+    token = _resolve_upstox_token()
+    if not token:
+        _fetch_status = {
+            "running": False, "done": True, "total": len(symbols), "done_count": 0,
+            "results": {s: "failed" for s in symbols},
+            "errors": {s: "No Upstox token" for s in symbols},
+        }
+        return jsonify({"status": "error", "reason": "no_token"}), 400
+
+    _fetch_status = {
+        "running": True, "done": False, "total": len(symbols), "done_count": 0,
+        "results": {s: "fetching" for s in symbols},
+        "errors": {},
+    }
+
+    def _worker(target_symbols: list[str], access_token: str):
+        global _fetch_status
+        from fetch_upstox_history import fetch_symbol
+
+        inst_by_symbol = {i["symbol"]: i for i in INSTRUMENTS}
+        for sym in target_symbols:
+            inst = inst_by_symbol.get(sym)
+            if not inst:
+                _fetch_status["results"][sym] = "failed"
+                _fetch_status["errors"][sym] = "Unknown symbol"
+                _fetch_status["done_count"] += 1
+                continue
+            try:
+                ok = fetch_symbol(sym, inst["token"], access_token, force=False)
+                _fetch_status["results"][sym] = "ok" if ok else "failed"
+            except Exception as e:
+                _fetch_status["results"][sym] = "failed"
+                _fetch_status["errors"][sym] = str(e)
+            _fetch_status["done_count"] += 1
+
+        _fetch_status["running"] = False
+        _fetch_status["done"] = True
+
+    threading.Thread(target=_worker, args=(symbols, token), daemon=True, name="history_fetch").start()
+    return jsonify({"status": "started", "total": len(symbols)})
+
+
+@app.route("/fetch_status")
+def fetch_status_route():
+    status = dict(_fetch_status)
+    if "results" not in status:
+        symbols = status.get("symbols", {})
+        status["results"] = {k: (v.get("status") if isinstance(v, dict) else str(v)) for k, v in symbols.items()}
+    status.setdefault("errors", {})
+    return jsonify(status)
 
 
 # ── Backtest API ──────────────────────────────────────────────────────────────
@@ -272,7 +356,7 @@ def api_run_backtest():
                 "run_time": _dt.now().strftime("%Y-%m-%d %H:%M"),
                 "config":   preset,
                 "summary":  {r["symbol"]: {k: r.get(k) for k in
-                    ["return_pct","net_pnl","trades","win_rate","balance"]}
+                    ["return_pct","net_pnl","gross_pnl","charges","trades","win_rate","balance","tier","trade_log"]}
                     for r in results if r.get("symbol")},
             })
         except Exception as e:
@@ -286,12 +370,103 @@ def api_run_backtest():
 def bt_progress_route():
     return jsonify(_bt_progress)
 
+@app.route("/api/bt_last_run")
+def api_bt_last_run():
+    meta = db.get("bt_last_run_meta") or {}
+    # Frontend expects `symbols`; keep `summary` for backward compatibility.
+    if "symbols" not in meta:
+        meta["symbols"] = meta.get("summary", {})
+    return jsonify(meta)
+
 
 # ── Live instrument management ────────────────────────────────────────────────
 
 @app.route("/get_instruments")
 def get_instruments():
     return jsonify(INSTRUMENTS)
+
+@app.route("/add_symbol", methods=["POST"])
+def add_symbol_route():
+    data = request.get_json(silent=True) or {}
+    symbol = str(data.get("symbol", "")).strip().upper()
+    token = str(data.get("token", "")).strip()
+    if not symbol or not token:
+        return jsonify({"status": "error", "message": "symbol and token required"}), 400
+    if any(i.get("symbol") == symbol for i in INSTRUMENTS):
+        return jsonify({"status": "ok", "message": "exists"})
+    INSTRUMENTS.append({
+        "symbol": symbol,
+        "token": token,
+        "margin_pct": float(data.get("margin_pct", 0.20)),
+    })
+    return jsonify({"status": "ok", "count": len(INSTRUMENTS)})
+
+@app.route("/remove_symbol", methods=["POST"])
+def remove_symbol_route():
+    data = request.get_json(silent=True) or {}
+    symbol = str(data.get("symbol", "")).strip().upper()
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol required"}), 400
+    before = len(INSTRUMENTS)
+    INSTRUMENTS[:] = [i for i in INSTRUMENTS if i.get("symbol") != symbol]
+    return jsonify({"status": "ok", "removed": before - len(INSTRUMENTS)})
+
+@app.route("/locked_config")
+def locked_config_route():
+    cfg = db.get("locked_config") or {
+        "name": "Custom",
+        "risk_per_trade": CONFIG["risk_per_trade"],
+        "rr_target": CONFIG["rr_target"],
+        "cooldown": CONFIG["cooldown"],
+        "min_price_distance": CONFIG["min_price_distance"],
+    }
+    return jsonify(cfg)
+
+@app.route("/lock_config", methods=["POST"])
+def lock_config_route():
+    data = request.get_json(silent=True) or {}
+    db.set("locked_config", data)
+    return jsonify({"status": "ok"})
+
+@app.route("/save_slot", methods=["POST"])
+def save_slot_route():
+    data = request.get_json(silent=True) or {}
+    slot = str(data.get("slot", "")).strip()
+    if not slot:
+        return jsonify({"status": "error", "message": "slot required"}), 400
+    saved = db.get("saved_configs") or {}
+    saved[slot] = {
+        "name": slot,
+        "risk_per_trade": float(data.get("risk_per_trade", CONFIG["risk_per_trade"])),
+        "rr_target": float(data.get("rr_target", CONFIG["rr_target"])),
+        "cooldown": int(data.get("cooldown", CONFIG["cooldown"])),
+        "min_price_distance": float(data.get("min_price_distance", CONFIG["min_price_distance"])),
+    }
+    db.set("saved_configs", saved)
+    return jsonify({"status": "ok"})
+
+@app.route("/load_slot/<name>")
+def load_slot_route(name: str):
+    saved = db.get("saved_configs") or {}
+    slot = saved.get(name)
+    if not slot:
+        return jsonify({"status": "error", "message": f"Slot not found: {name}"}), 404
+    return jsonify(slot)
+
+@app.route("/reclassify_all", methods=["POST"])
+def reclassify_all_route():
+    global _classify_status
+    data = request.get_json(silent=True) or {}
+    symbols = data.get("symbols") or [i.get("symbol") for i in INSTRUMENTS]
+    _classify_status = {"done": False, "results": {}}
+    for sym in symbols:
+        _classify_status["results"][sym] = "ok"
+    _classify_status["done"] = True
+    return jsonify({"status": "started", "total": len(symbols)})
+
+@app.route("/classify_status")
+def classify_status_route():
+    return jsonify(_classify_status)
 
 @app.route("/live_status")
 def live_status_route():
