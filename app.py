@@ -26,6 +26,11 @@ _bt_progress = {
     "running": False, "config": "", "total": 0, "done": 0, "symbols": {},
 }
 
+_fetch_status = {
+    "running": False, "done": True, "total": 0, "done_count": 0,
+    "results": {}, "errors": {}
+}
+
 
 # ── JSON sanitiser (strips pandas Timestamps) ─────────────────────────────────
 def _sanitize(obj):
@@ -188,9 +193,11 @@ def auth_callback():
     if not code:
         return "No auth code", 400
     try:
-        from upstox_auth import exchange_code_for_token
+        from upstox_auth import exchange_code_for_token, save_token
         token = exchange_code_for_token(code)
-        CONFIG["upstox_access_token"] = token
+        if not token:
+            return "Token exchange failed", 500
+        save_token(token)
         return redirect("/live")
     except Exception as e:
         return f"Token exchange failed: {e}", 500
@@ -218,6 +225,82 @@ def signals_page():
 @app.route("/trade_log")
 def trade_log_page():
     return render_template("trade_log.html")
+
+
+# ── History fetch API (Backtest step 2) ───────────────────────────────────────
+
+def _resolve_upstox_token() -> str:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    token = os.getenv("UPSTOX_ACCESS_TOKEN", "") or CONFIG.get("upstox_access_token", "")
+    if token:
+        return token
+    try:
+        from upstox_auth import load_token_from_db
+        token = load_token_from_db() or ""
+        if token:
+            CONFIG["upstox_access_token"] = token
+        return token
+    except Exception:
+        return ""
+
+
+@app.route("/refetch_all", methods=["POST"])
+def refetch_all_route():
+    global _fetch_status
+    payload = request.get_json(silent=True) or {}
+    symbols = payload.get("symbols") or [i["symbol"] for i in INSTRUMENTS]
+
+    token = _resolve_upstox_token()
+    if not token:
+        _fetch_status = {
+            "running": False, "done": True, "total": len(symbols), "done_count": 0,
+            "results": {s: "failed" for s in symbols},
+            "errors": {s: "No Upstox token" for s in symbols},
+        }
+        return jsonify({"status": "error", "reason": "no_token"}), 400
+
+    _fetch_status = {
+        "running": True, "done": False, "total": len(symbols), "done_count": 0,
+        "results": {s: "fetching" for s in symbols},
+        "errors": {},
+    }
+
+    def _worker(target_symbols: list[str], access_token: str):
+        global _fetch_status
+        from fetch_upstox_history import fetch_symbol
+
+        inst_by_symbol = {i["symbol"]: i for i in INSTRUMENTS}
+        for sym in target_symbols:
+            inst = inst_by_symbol.get(sym)
+            if not inst:
+                _fetch_status["results"][sym] = "failed"
+                _fetch_status["errors"][sym] = "Unknown symbol"
+                _fetch_status["done_count"] += 1
+                continue
+            try:
+                ok = fetch_symbol(sym, inst["token"], access_token, force=False)
+                _fetch_status["results"][sym] = "ok" if ok else "failed"
+            except Exception as e:
+                _fetch_status["results"][sym] = "failed"
+                _fetch_status["errors"][sym] = str(e)
+            _fetch_status["done_count"] += 1
+
+        _fetch_status["running"] = False
+        _fetch_status["done"] = True
+
+    threading.Thread(target=_worker, args=(symbols, token), daemon=True, name="history_fetch").start()
+    return jsonify({"status": "started", "total": len(symbols)})
+
+
+@app.route("/fetch_status")
+def fetch_status_route():
+    status = dict(_fetch_status)
+    if "results" not in status:
+        symbols = status.get("symbols", {})
+        status["results"] = {k: (v.get("status") if isinstance(v, dict) else str(v)) for k, v in symbols.items()}
+    status.setdefault("errors", {})
+    return jsonify(status)
 
 
 # ── Backtest API ──────────────────────────────────────────────────────────────
@@ -272,7 +355,7 @@ def api_run_backtest():
                 "run_time": _dt.now().strftime("%Y-%m-%d %H:%M"),
                 "config":   preset,
                 "summary":  {r["symbol"]: {k: r.get(k) for k in
-                    ["return_pct","net_pnl","trades","win_rate","balance"]}
+                    ["return_pct","net_pnl","gross_pnl","charges","trades","win_rate","balance","tier"]}
                     for r in results if r.get("symbol")},
             })
         except Exception as e:
@@ -285,6 +368,14 @@ def api_run_backtest():
 @app.route("/bt_progress")
 def bt_progress_route():
     return jsonify(_bt_progress)
+
+@app.route("/api/bt_last_run")
+def api_bt_last_run():
+    meta = db.get("bt_last_run_meta") or {}
+    # Frontend expects `symbols`; keep `summary` for backward compatibility.
+    if "symbols" not in meta:
+        meta["symbols"] = meta.get("summary", {})
+    return jsonify(meta)
 
 
 # ── Live instrument management ────────────────────────────────────────────────
