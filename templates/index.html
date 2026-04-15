@@ -901,7 +901,7 @@ function restoreLastBacktest(showToast=true){
       trades:     s.trades||0,
       win_rate:   s.win_rate||0,
       tier:       s.tier,
-      trade_log:  [],
+      trade_log:  s.trade_log||[],
     }));
     allResults = {'Custom': rows};
     fetchDone = true;

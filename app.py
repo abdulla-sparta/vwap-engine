@@ -30,6 +30,7 @@ _fetch_status = {
     "running": False, "done": True, "total": 0, "done_count": 0,
     "results": {}, "errors": {}
 }
+_classify_status = {"done": True, "results": {}}
 
 
 # ── JSON sanitiser (strips pandas Timestamps) ─────────────────────────────────
@@ -355,7 +356,7 @@ def api_run_backtest():
                 "run_time": _dt.now().strftime("%Y-%m-%d %H:%M"),
                 "config":   preset,
                 "summary":  {r["symbol"]: {k: r.get(k) for k in
-                    ["return_pct","net_pnl","gross_pnl","charges","trades","win_rate","balance","tier"]}
+                    ["return_pct","net_pnl","gross_pnl","charges","trades","win_rate","balance","tier","trade_log"]}
                     for r in results if r.get("symbol")},
             })
         except Exception as e:
@@ -383,6 +384,89 @@ def api_bt_last_run():
 @app.route("/get_instruments")
 def get_instruments():
     return jsonify(INSTRUMENTS)
+
+@app.route("/add_symbol", methods=["POST"])
+def add_symbol_route():
+    data = request.get_json(silent=True) or {}
+    symbol = str(data.get("symbol", "")).strip().upper()
+    token = str(data.get("token", "")).strip()
+    if not symbol or not token:
+        return jsonify({"status": "error", "message": "symbol and token required"}), 400
+    if any(i.get("symbol") == symbol for i in INSTRUMENTS):
+        return jsonify({"status": "ok", "message": "exists"})
+    INSTRUMENTS.append({
+        "symbol": symbol,
+        "token": token,
+        "margin_pct": float(data.get("margin_pct", 0.20)),
+    })
+    return jsonify({"status": "ok", "count": len(INSTRUMENTS)})
+
+@app.route("/remove_symbol", methods=["POST"])
+def remove_symbol_route():
+    data = request.get_json(silent=True) or {}
+    symbol = str(data.get("symbol", "")).strip().upper()
+    if not symbol:
+        return jsonify({"status": "error", "message": "symbol required"}), 400
+    before = len(INSTRUMENTS)
+    INSTRUMENTS[:] = [i for i in INSTRUMENTS if i.get("symbol") != symbol]
+    return jsonify({"status": "ok", "removed": before - len(INSTRUMENTS)})
+
+@app.route("/locked_config")
+def locked_config_route():
+    cfg = db.get("locked_config") or {
+        "name": "Custom",
+        "risk_per_trade": CONFIG["risk_per_trade"],
+        "rr_target": CONFIG["rr_target"],
+        "cooldown": CONFIG["cooldown"],
+        "min_price_distance": CONFIG["min_price_distance"],
+    }
+    return jsonify(cfg)
+
+@app.route("/lock_config", methods=["POST"])
+def lock_config_route():
+    data = request.get_json(silent=True) or {}
+    db.set("locked_config", data)
+    return jsonify({"status": "ok"})
+
+@app.route("/save_slot", methods=["POST"])
+def save_slot_route():
+    data = request.get_json(silent=True) or {}
+    slot = str(data.get("slot", "")).strip()
+    if not slot:
+        return jsonify({"status": "error", "message": "slot required"}), 400
+    saved = db.get("saved_configs") or {}
+    saved[slot] = {
+        "name": slot,
+        "risk_per_trade": float(data.get("risk_per_trade", CONFIG["risk_per_trade"])),
+        "rr_target": float(data.get("rr_target", CONFIG["rr_target"])),
+        "cooldown": int(data.get("cooldown", CONFIG["cooldown"])),
+        "min_price_distance": float(data.get("min_price_distance", CONFIG["min_price_distance"])),
+    }
+    db.set("saved_configs", saved)
+    return jsonify({"status": "ok"})
+
+@app.route("/load_slot/<name>")
+def load_slot_route(name: str):
+    saved = db.get("saved_configs") or {}
+    slot = saved.get(name)
+    if not slot:
+        return jsonify({"status": "error", "message": f"Slot not found: {name}"}), 404
+    return jsonify(slot)
+
+@app.route("/reclassify_all", methods=["POST"])
+def reclassify_all_route():
+    global _classify_status
+    data = request.get_json(silent=True) or {}
+    symbols = data.get("symbols") or [i.get("symbol") for i in INSTRUMENTS]
+    _classify_status = {"done": False, "results": {}}
+    for sym in symbols:
+        _classify_status["results"][sym] = "ok"
+    _classify_status["done"] = True
+    return jsonify({"status": "started", "total": len(symbols)})
+
+@app.route("/classify_status")
+def classify_status_route():
+    return jsonify(_classify_status)
 
 @app.route("/live_status")
 def live_status_route():
