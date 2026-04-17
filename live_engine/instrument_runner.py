@@ -97,8 +97,8 @@ class InstrumentRunner:
             except Exception:
                 pass
 
-        candle_5m  = self.builder_5m.update(ltp, timestamp)
-        candle_15m = self.builder_15m.update(ltp, timestamp)
+        candle_5m  = self.builder_5m.update(ltp, timestamp, volume)
+        candle_15m = self.builder_15m.update(ltp, timestamp, volume)
 
         if candle_15m is not None:
             self.engine.on_htf_candle(candle_15m)
