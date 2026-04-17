@@ -366,26 +366,45 @@ def api_run_backtest():
 
     def _run():
         global _bt_progress
-        results = []
-        for i, sym in enumerate(symbols):
-            r = run_backtest(sym, preset)
-            results.append(r)
-            _bt_progress["done"] = i + 1
-            _bt_progress["symbols"][sym] = {
-                "status":     "ok" if not r.get("error") else "error",
-                "return_pct": r.get("return_pct"),
-                "net_pnl":    r.get("net_pnl"),
-                "gross_pnl":  r.get("gross_pnl"),
-                "charges":    r.get("charges"),
-                "trades":     r.get("trades"),
-                "win_rate":   r.get("win_rate"),
-                "balance":    r.get("balance"),
-                "tier":       r.get("tier"),
-                "trade_log":  r.get("trade_log", []),
-                "error":      r.get("error"),
-            }
-            socketio.emit("bt_progress", dict(_bt_progress))
+        import threading as _threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        _lock = _threading.Lock()
+        results_map = {}
+        max_workers = min(6, len(symbols))
+
+        def _run_one(sym):
+            inst_preset = dict(preset)
+            r = run_backtest(sym, inst_preset)
+            with _lock:
+                _bt_progress["done"] = _bt_progress.get("done", 0) + 1
+                _bt_progress["symbols"][sym] = {
+                    "status":     "ok" if not r.get("error") else "error",
+                    "return_pct": r.get("return_pct"),
+                    "net_pnl":    r.get("net_pnl"),
+                    "gross_pnl":  r.get("gross_pnl"),
+                    "charges":    r.get("charges"),
+                    "trades":     r.get("trades"),
+                    "win_rate":   r.get("win_rate"),
+                    "balance":    r.get("balance"),
+                    "tier":       r.get("tier"),
+                    "trade_log":  r.get("trade_log", []),
+                    "error":      r.get("error"),
+                }
+                results_map[sym] = r
+                socketio.emit("bt_progress", dict(_bt_progress))
+            return r
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_run_one, sym): sym for sym in symbols}
+            for fut in as_completed(futures):
+                try:
+                    fut.result(timeout=180)
+                except Exception as e:
+                    sym = futures[fut]
+                    print(f"[BT] {sym} failed: {e}")
+
+        results = list(results_map.values())
         _bt_progress["running"] = False
         socketio.emit("bt_progress", _bt_progress)
 

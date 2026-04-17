@@ -66,6 +66,7 @@ def run_backtest(symbol: str, preset: dict) -> dict:
         symbol=symbol,
         backtest_rr=rr,
     )
+    engine._backtest_mode = True   # suppress per-candle HTF bias logs
     # pivot_left/right derived from swing_lookback (half-window each side)
     pivot_side = max(2, swing_look // 2)
     engine.attach(
@@ -128,10 +129,28 @@ def run_backtest(symbol: str, preset: dict) -> dict:
 
 
 def run_backtest_all(preset: dict) -> list[dict]:
-    """Run backtest for all instruments, return sorted results."""
-    results = []
-    for inst in INSTRUMENTS:
-        r = run_backtest(inst["symbol"], preset)
-        results.append(r)
+    """
+    Run backtest for all instruments in parallel (ThreadPoolExecutor).
+    Returns results sorted by return_pct descending.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    max_workers = min(8, len(INSTRUMENTS))   # cap at 8 threads — Railway has limited cores
+    results     = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(run_backtest, inst["symbol"], preset): inst["symbol"]
+            for inst in INSTRUMENTS
+        }
+        for fut in as_completed(futures):
+            sym = futures[fut]
+            try:
+                r = fut.result(timeout=120)   # 2-min per-symbol hard timeout
+            except Exception as e:
+                r = {"symbol": sym, "error": str(e), "return_pct": -9999}
+            results.append(r)
+            print(f"[BT] {sym} done — {len(results)}/{len(INSTRUMENTS)}")
+
     results.sort(key=lambda x: x.get("return_pct", -9999), reverse=True)
     return results

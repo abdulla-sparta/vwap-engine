@@ -140,7 +140,8 @@ class TradeEngine:
         bias = self.htf.update(candle)
         if bias != self.current_bias:
             self.current_bias = bias
-            print(f"[{self.symbol}] HTF bias → {bias}")
+            if not getattr(self, "_backtest_mode", False):
+                print(f"[{self.symbol}] HTF bias → {bias}")
 
     def on_ltf_candle(self, candle):
         self.index += 1
