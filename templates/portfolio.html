@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StructureEngine — Portfolio</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+<style>
+:root{
+  --bg:#f0f2f5;--surface:#fff;--border:#e2e6ea;--text:#1a1d23;--muted:#6b7280;
+  --blue:#0f6fff;--green:#16a34a;--red:#dc2626;--amber:#d97706;
+  --surface2:#f8f9fb;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);font-size:13px;min-height:100vh}
+.nav{height:48px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:14px;position:sticky;top:0;z-index:100}
+.nav-logo{font-weight:600;font-size:14px;letter-spacing:.5px}
+.nav-badge{background:#fef3c7;color:#92400e;font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px}
+.nav-sep{width:1px;height:20px;background:var(--border)}
+.nav-tab{padding:6px 12px;border-radius:6px;cursor:pointer;color:var(--muted);font-weight:500;font-size:13px;text-decoration:none}
+.nav-tab:hover{background:var(--bg)}
+.nav-tab.active{background:#f0f4ff;color:var(--blue);font-weight:600}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:#e2e6ea}
+.conn-dot.live{background:var(--green);box-shadow:0 0 6px rgba(22,163,74,.5)}
+.nav-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+
+/* Portfolio header stats */
+.port-header{background:var(--surface);border-bottom:1px solid var(--border);padding:0}
+.port-stats{display:grid;grid-template-columns:repeat(6,1fr)}
+.port-stat{padding:12px 16px;border-right:1px solid var(--border);text-align:center}
+.port-stat:last-child{border-right:none}
+.ps-label{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;margin-bottom:4px}
+.ps-val{font-size:18px;font-weight:700;font-family:'DM Mono',monospace}
+.pos{color:var(--green)} .neg{color:var(--red)} .neu{color:var(--text)}
+
+/* Controls */
+.controls{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border)}
+.ctrl-label{font-size:12px;font-weight:600;color:var(--muted)}
+.date-pick{padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;font-family:'DM Sans',sans-serif;background:var(--surface)}
+.refresh-btn{padding:6px 14px;border:1px solid var(--border);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:var(--surface);display:flex;align-items:center;gap:5px}
+.refresh-btn:hover{background:var(--bg)}
+.mode-tabs{display:flex;gap:4px;background:var(--bg);border-radius:8px;padding:3px}
+.mode-tab{padding:5px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;color:var(--muted)}
+.mode-tab.active{background:var(--surface);color:var(--blue);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+
+/* Table */
+.table-wrap{padding:16px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+thead tr{background:var(--surface2)}
+th{padding:10px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;border-bottom:2px solid var(--border)}
+td{padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--surface2)}
+.sym-cell{font-weight:700;font-size:13px}
+.tier-badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;margin-left:5px}
+.t1{background:#dbeafe;color:#1d4ed8}
+.t2{background:#f0fdf4;color:#15803d}
+.bias-bull{color:var(--green);font-weight:600;font-size:11px}
+.bias-bear{color:var(--red);font-weight:600;font-size:11px}
+.bias-none{color:var(--muted);font-size:11px}
+.mono{font-family:'DM Mono',monospace;font-size:12px}
+.bar-wrap{width:80px;height:6px;background:var(--bg);border-radius:3px;display:inline-block;vertical-align:middle;margin-left:6px}
+.bar-inner{height:100%;border-radius:3px}
+.in-pos{display:inline-block;padding:2px 7px;border-radius:4px;background:#fef3c7;color:#92400e;font-size:10px;font-weight:600}
+.watching{display:inline-block;padding:2px 7px;border-radius:4px;background:var(--bg);color:var(--muted);font-size:10px;font-weight:600}
+
+/* Trade log panel */
+.trade-panel{display:none;padding:0 16px 16px}
+.trade-panel.open{display:block}
+.tp-header{display:flex;align-items:center;justify-content:space-between;padding:12px 0 8px}
+.tp-title{font-weight:600;font-size:13px}
+.tp-close{cursor:pointer;color:var(--muted);font-size:18px;line-height:1}
+.tp-table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+.tp-table th{padding:8px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.4px;text-transform:uppercase;background:var(--surface2);border-bottom:1px solid var(--border)}
+.tp-table td{padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px}
+.tp-table tr:last-child td{border-bottom:none}
+.buy-dir{color:var(--green);font-weight:700}
+.sell-dir{color:var(--red);font-weight:700}
+
+/* Summary footer */
+.summary-row{background:var(--surface);border-top:2px solid var(--border);font-weight:700}
+.summary-row td{padding:12px 14px;font-size:12px}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <div class="nav-logo">STRUCTUREENGINE</div>
+  <span class="nav-badge">LIVE PAPER</span>
+  <div class="nav-sep"></div>
+  <a class="nav-tab" href="/backtest">Backtest</a>
+  <a class="nav-tab" href="/live">Live</a>
+  <a class="nav-tab" href="/heatmap">Heatmap</a>
+  <a class="nav-tab" href="/signals">Signals</a>
+  <a class="nav-tab active" href="/portfolio">Portfolio</a>
+  <a class="nav-tab" href="/reports/strategy">📊 Performance</a>
+  <div class="nav-right">
+    <div class="conn-dot" id="connDot"></div>
+    <span style="font-size:11px;color:var(--muted)" id="connLabel">Offline</span>
+  </div>
+</div>
+
+<!-- Portfolio header stats -->
+<div class="port-header">
+  <div class="port-stats">
+    <div class="port-stat">
+      <div class="ps-label">Total Balance</div>
+      <div class="ps-val neu" id="hdrBalance">—</div>
+    </div>
+    <div class="port-stat">
+      <div class="ps-label">Day P&L</div>
+      <div class="ps-val" id="hdrDayPnl">—</div>
+    </div>
+    <div class="port-stat">
+      <div class="ps-label">Unrealised</div>
+      <div class="ps-val" id="hdrUnreal">—</div>
+    </div>
+    <div class="port-stat">
+      <div class="ps-label">Net P&L</div>
+      <div class="ps-val" id="hdrNet">—</div>
+    </div>
+    <div class="port-stat">
+      <div class="ps-label">Trades Today</div>
+      <div class="ps-val neu" id="hdrTrades">—</div>
+    </div>
+    <div class="port-stat">
+      <div class="ps-label">Active Positions</div>
+      <div class="ps-val neu" id="hdrPositions">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <span class="ctrl-label">Date:</span>
+  <input type="date" class="date-pick" id="datePick">
+  <button class="refresh-btn" onclick="loadPortfolio()">↺ Refresh</button>
+  <div class="mode-tabs">
+    <div class="mode-tab active" id="tabLive" onclick="switchTab('live')">Live</div>
+    <div class="mode-tab" id="tabHistory" onclick="switchTab('history')">History</div>
+  </div>
+  <span style="font-size:11px;color:var(--muted)" id="lastUpdate"></span>
+</div>
+
+<!-- Main table -->
+<div class="table-wrap">
+  <table id="portTable">
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>Tier</th>
+        <th>Bias</th>
+        <th>Balance</th>
+        <th>Day P&L</th>
+        <th>Unrealised</th>
+        <th>Net</th>
+        <th>Trades</th>
+        <th>Status</th>
+        <th>Kill Switch</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody id="portBody">
+      <tr><td colspan="11" style="text-align:center;padding:32px;color:var(--muted)">Loading portfolio...</td></tr>
+    </tbody>
+    <tfoot>
+      <tr class="summary-row" id="summaryRow" style="display:none">
+        <td colspan="3">TOTAL</td>
+        <td id="sumBalance" class="mono">—</td>
+        <td id="sumDayPnl" class="mono">—</td>
+        <td id="sumUnreal" class="mono">—</td>
+        <td id="sumNet" class="mono">—</td>
+        <td id="sumTrades">—</td>
+        <td colspan="3"></td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+<!-- Trade detail panel -->
+<div class="trade-panel" id="tradePanel">
+  <div class="tp-header">
+    <div class="tp-title" id="tpTitle">Trade Log</div>
+    <div class="tp-close" onclick="closeTrades()">✕</div>
+  </div>
+  <table class="tp-table">
+    <thead>
+      <tr><th>Dir</th><th>Entry Time</th><th>Exit Time</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Gross</th><th>Charges</th><th>Net P&L</th><th>Reason</th></tr>
+    </thead>
+    <tbody id="tpBody"></tbody>
+  </table>
+</div>
+
+<script>
+const T1 = ['TRENT','CUMMINSIND','M&M','HCLTECH'];
+const T2 = ['PERSISTENT','OFSS','RELIANCE','BOSCHLTD','MPHASIS','MARUTI','VEDL'];
+let currentTab = 'live';
+let lastData = [];
+
+function fmt(v){
+  if(v==null||v===undefined)return '—';
+  const n=Math.round(v);
+  return (n>=0?'+':'')+n.toLocaleString('en-IN');
+}
+function fmtBal(v){
+  if(!v)return '—';
+  return '₹'+(Math.round(v)/1000).toFixed(1)+'k';
+}
+function cls(v){return v==null?'neu':v>0?'pos':'neg'}
+function tierOf(sym){return T1.includes(sym)?'T1':T2.includes(sym)?'T2':'T3'}
+
+function renderRow(d) {
+  const sym     = d.symbol;
+  const tier    = tierOf(sym);
+  const real    = d.realised_pnl ?? 0;
+  const unreal  = d.unrealised_pnl ?? 0;
+  const net     = real + unreal;
+  const balance = d.balance ?? 0;
+  const trades  = d.daily_trades || [];
+  const pos     = d.position;
+  const ks      = d.kill_switch || {};
+  const killed  = ks.triggered;
+
+  const biasHtml = d.bias==='BULLISH'
+    ? `<span class="bias-bull">▲ BULL</span>`
+    : d.bias==='BEARISH'
+    ? `<span class="bias-bear">▼ BEAR</span>`
+    : `<span class="bias-none">— NO BIAS</span>`;
+
+  const killPct = ks.peak > 0 ? Math.min(100, Math.max(0, (ks.current / ks.peak) * 100)) : 100;
+  const killColor = killed ? 'var(--red)' : killPct < 50 ? 'var(--amber)' : 'var(--green)';
+  const killLabel = killed
+    ? '<span style="color:var(--red);font-weight:700;font-size:10px">🔴 FIRED</span>'
+    : `<span style="font-size:10px;color:var(--muted)">₹${Math.round((ks.peak||0)/1000)}k · ${Math.round((ks.percent||0.9)*100)}%</span>`;
+
+  const killBar = `<div style="display:flex;align-items:center;gap:5px">
+    ${killLabel}
+    <div class="bar-wrap"><div class="bar-inner" style="width:${killPct}%;background:${killColor}"></div></div>
+  </div>`;
+
+  const statusHtml = pos
+    ? `<span class="in-pos">📍 ${pos.side} ₹${pos.entry_price}</span>`
+    : `<span class="watching">Watching</span>`;
+
+  return `<tr id="row-${sym}">
+    <td class="sym-cell">${sym}<span class="tier-badge ${tier.toLowerCase()}">${tier}</span></td>
+    <td>${biasHtml}</td>
+    <td>${biasHtml}</td>
+    <td class="mono">${fmtBal(balance)}</td>
+    <td class="mono ${cls(real)}">${fmt(real)}</td>
+    <td class="mono ${cls(unreal)}">${fmt(unreal)}</td>
+    <td class="mono ${cls(net)}">${fmt(net)}</td>
+    <td style="color:var(--muted)">${trades.length}</td>
+    <td>${statusHtml}</td>
+    <td>${killBar}</td>
+    <td><button class="refresh-btn" style="font-size:10px;padding:3px 8px" onclick="showTrades('${sym}')">📋 Trades</button></td>
+  </tr>`;
+}
+
+function renderTable(instruments) {
+  lastData = instruments;
+  const body = document.getElementById('portBody');
+  if (!instruments || !instruments.length) {
+    body.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:32px;color:var(--muted)">No data — engine may not be running</td></tr>';
+    document.getElementById('summaryRow').style.display = 'none';
+    return;
+  }
+
+  // Sort: in-position first, then by day P&L descending
+  const sorted = [...instruments].sort((a,b)=>{
+    if(a.position && !b.position) return -1;
+    if(!a.position && b.position) return 1;
+    return (b.realised_pnl||0) - (a.realised_pnl||0);
+  });
+
+  body.innerHTML = sorted.map(renderRow).join('');
+
+  // Summary footer
+  const totBal    = instruments.reduce((s,d)=>s+(d.balance||0),0);
+  const totDay    = instruments.reduce((s,d)=>s+(d.realised_pnl||0),0);
+  const totUnreal = instruments.reduce((s,d)=>s+(d.unrealised_pnl||0),0);
+  const totNet    = totDay + totUnreal;
+  const totTrades = instruments.reduce((s,d)=>s+(d.daily_trades||[]).length,0);
+  const totPos    = instruments.filter(d=>d.position).length;
+
+  document.getElementById('sumBalance').textContent = fmtBal(totBal);
+  document.getElementById('sumDayPnl').className  = 'mono '+cls(totDay);
+  document.getElementById('sumDayPnl').textContent = fmt(totDay);
+  document.getElementById('sumUnreal').className  = 'mono '+cls(totUnreal);
+  document.getElementById('sumUnreal').textContent = fmt(totUnreal);
+  document.getElementById('sumNet').className     = 'mono '+cls(totNet);
+  document.getElementById('sumNet').textContent   = fmt(totNet);
+  document.getElementById('sumTrades').textContent = totTrades;
+  document.getElementById('summaryRow').style.display = '';
+
+  // Header stats
+  document.getElementById('hdrBalance').textContent = '₹'+Math.round(totBal/1000)+'k';
+  document.getElementById('hdrDayPnl').className  = 'ps-val '+cls(totDay);
+  document.getElementById('hdrDayPnl').textContent = fmt(totDay);
+  document.getElementById('hdrUnreal').className  = 'ps-val '+cls(totUnreal);
+  document.getElementById('hdrUnreal').textContent = fmt(totUnreal);
+  document.getElementById('hdrNet').className     = 'ps-val '+cls(totNet);
+  document.getElementById('hdrNet').textContent   = fmt(totNet);
+  document.getElementById('hdrTrades').textContent = totTrades;
+  document.getElementById('hdrPositions').textContent = totPos;
+
+  document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+function showTrades(sym) {
+  const d = lastData.find(x=>x.symbol===sym);
+  if (!d) return;
+  const trades = d.daily_trades || [];
+  document.getElementById('tpTitle').textContent = `${sym} — Trade Log (${document.getElementById('datePick').value})`;
+  const body = document.getElementById('tpBody');
+  if (!trades.length) {
+    body.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:16px;color:var(--muted)">No trades on this date</td></tr>';
+  } else {
+    body.innerHTML = trades.map(t=>{
+      const dirCls = t.direction==='BUY'?'buy-dir':'sell-dir';
+      const pnlCls = (t.net_pnl||0)>=0?'pos':'neg';
+      return `<tr>
+        <td class="${dirCls}">${t.direction}</td>
+        <td style="font-family:monospace">${String(t.entry_time).slice(11,16)}</td>
+        <td style="font-family:monospace">${String(t.exit_time).slice(11,16)}</td>
+        <td>₹${t.entry_price}</td>
+        <td>₹${t.exit_price}</td>
+        <td>${t.qty}</td>
+        <td class="${(t.gross_pnl||0)>=0?'pos':'neg'}">${fmt(t.gross_pnl)}</td>
+        <td style="color:var(--muted)">${fmt(t.charges)}</td>
+        <td class="${pnlCls}" style="font-weight:700">${fmt(t.net_pnl)}</td>
+        <td style="color:var(--muted);font-size:11px">${t.reason||''}</td>
+      </tr>`;
+    }).join('');
+  }
+  document.getElementById('tradePanel').classList.add('open');
+  document.getElementById('tradePanel').scrollIntoView({behavior:'smooth'});
+}
+
+function closeTrades() {
+  document.getElementById('tradePanel').classList.remove('open');
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tabLive').className   = 'mode-tab' + (tab==='live'?    ' active':'');
+  document.getElementById('tabHistory').className= 'mode-tab' + (tab==='history'?' active':'');
+  loadPortfolio();
+}
+
+function loadPortfolio() {
+  const date = document.getElementById('datePick').value;
+  if (currentTab === 'live') {
+    fetch('/live_status').then(r=>r.json()).then(data=>{
+      renderTable(data.instruments || []);
+    }).catch(()=>{
+      document.getElementById('portBody').innerHTML =
+        '<tr><td colspan="11" style="text-align:center;padding:32px;color:var(--muted)">Engine not running</td></tr>';
+    });
+  } else {
+    // History mode: load trades from DB for selected date
+    fetch('/live_trades_all?date='+date).then(r=>r.json()).then(trades=>{
+      // Build synthetic instrument rows from trade data
+      const syms = {};
+      for (const [sym, tlist] of Object.entries(trades)) {
+        const dayPnl = tlist.reduce((s,t)=>s+(t.net_pnl||0),0);
+        syms[sym] = {
+          symbol: sym,
+          balance: null,
+          realised_pnl: dayPnl,
+          unrealised_pnl: 0,
+          daily_trades: tlist.map(t=>({...t, direction: t.direction||t.side})),
+          position: null,
+          bias: null,
+          kill_switch: {},
+        };
+      }
+      const rows = Object.values(syms).sort((a,b)=>(b.realised_pnl||0)-(a.realised_pnl||0));
+      if (!rows.length) {
+        document.getElementById('portBody').innerHTML =
+          '<tr><td colspan="11" style="text-align:center;padding:32px;color:var(--muted)">No trades on '+date+'</td></tr>';
+        document.getElementById('summaryRow').style.display='none';
+      } else {
+        renderTable(rows);
+      }
+    }).catch(()=>{});
+  }
+}
+
+// SocketIO: update live tab in real time
+const socket = io();
+socket.on('connect', ()=>{
+  document.getElementById('connDot').className='conn-dot live';
+  document.getElementById('connLabel').textContent='Live';
+});
+socket.on('disconnect',()=>{
+  document.getElementById('connDot').className='conn-dot';
+  document.getElementById('connLabel').textContent='Offline';
+});
+socket.on('live_update', data=>{
+  if (currentTab==='live' && data.instruments) {
+    renderTable(data.instruments);
+  }
+});
+
+// Init
+// Use IST date (UTC+5:30) to match DB date_str format
+const _istNow = new Date(Date.now() + (5*60+30)*60000);
+document.getElementById('datePick').value = _istNow.toISOString().slice(0,10);
+document.getElementById('datePick').addEventListener('change', loadPortfolio);
+loadPortfolio();
+</script>
+</body>
+</html>
