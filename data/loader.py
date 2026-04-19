@@ -27,8 +27,10 @@ def load_csv(path: str) -> pd.DataFrame:
     if time_col is None:
         raise ValueError(f"No datetime column found in CSV: {path}")
 
-    df[time_col] = pd.to_datetime(df[time_col])
+    df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
+    df.dropna(subset=[time_col], inplace=True)   # drop NaT rows
     df.set_index(time_col, inplace=True)
+    df = df[~df.index.duplicated(keep="last")]    # drop duplicate timestamps
     df.sort_index(inplace=True)
 
     for col in ["open", "high", "low", "close"]:

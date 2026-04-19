@@ -373,13 +373,51 @@ def api_run_backtest():
         results_map = {}
         max_workers = min(6, len(symbols))
 
+        import sys
+
         def _run_one(sym):
-            inst_preset = dict(preset)
-            r = run_backtest(sym, inst_preset)
+            import threading as _t
+            result_holder = {}
+            exception_holder = {}
+
+            def _worker():
+                try:
+                    print(f"[BT] Starting {sym}", flush=True)
+                    r = run_backtest(sym, dict(preset))
+                    result_holder["r"] = r
+                except Exception as exc:
+                    exception_holder["e"] = exc
+
+            t = _t.Thread(target=_worker, daemon=True)
+            t.start()
+            t.join(timeout=90)   # 90-second hard per-symbol timeout
+
+            if t.is_alive():
+                # Thread is stuck — force-mark as timed out
+                print(f"[BT] ⚠️  {sym} TIMED OUT after 90s — skipping", flush=True)
+                r = {"symbol": sym, "error": "timeout", "return_pct": -9999,
+                     "trades": 0, "win_rate": 0, "gross_pnl": 0,
+                     "charges": 0, "net_pnl": 0, "balance": 0, "trade_log": []}
+            elif "e" in exception_holder:
+                exc = exception_holder["e"]
+                print(f"[BT] ❌ {sym} error: {exc}", flush=True)
+                r = {"symbol": sym, "error": str(exc), "return_pct": -9999,
+                     "trades": 0, "win_rate": 0, "gross_pnl": 0,
+                     "charges": 0, "net_pnl": 0, "balance": 0, "trade_log": []}
+            else:
+                r = result_holder.get("r", {"symbol": sym, "error": "no result",
+                                            "return_pct": -9999, "trade_log": []})
+                trades = r.get("trades", 0)
+                ret    = r.get("return_pct", 0)
+                print(f"[BT] ✅ {sym} done — {trades} trades, {ret:+.1f}%", flush=True)
+
             with _lock:
                 _bt_progress["done"] = _bt_progress.get("done", 0) + 1
+                done_n = _bt_progress["done"]
+                total_n = len(symbols)
                 _bt_progress["symbols"][sym] = {
-                    "status":     "ok" if not r.get("error") else "error",
+                    "status":     "timeout" if r.get("error") == "timeout"
+                                  else ("ok" if not r.get("error") else "error"),
                     "return_pct": r.get("return_pct"),
                     "net_pnl":    r.get("net_pnl"),
                     "gross_pnl":  r.get("gross_pnl"),
@@ -392,6 +430,7 @@ def api_run_backtest():
                     "error":      r.get("error"),
                 }
                 results_map[sym] = r
+                print(f"[BT] Progress: {done_n}/{total_n}", flush=True)
                 socketio.emit("bt_progress", dict(_bt_progress))
             return r
 
@@ -399,10 +438,10 @@ def api_run_backtest():
             futures = {pool.submit(_run_one, sym): sym for sym in symbols}
             for fut in as_completed(futures):
                 try:
-                    fut.result(timeout=180)
+                    fut.result()
                 except Exception as e:
                     sym = futures[fut]
-                    print(f"[BT] {sym} failed: {e}")
+                    print(f"[BT] {sym} future error: {e}", flush=True)
 
         results = list(results_map.values())
         _bt_progress["running"] = False

@@ -55,8 +55,10 @@ def run_backtest(symbol: str, preset: dict) -> dict:
     swing_look  = int(  _resolve("swing_lookback",       20))
 
     df1m = load_csv(csv_path)
+    print(f"[BT:{symbol}] CSV loaded — {len(df1m)} rows", flush=True)
     df_htf = resample(df1m, htf_min)
     df_ltf = resample(df1m, ltf_min)
+    print(f"[BT:{symbol}] Resampled — HTF={len(df_htf)} LTF={len(df_ltf)} candles", flush=True)
 
     broker = PaperBroker(balance=balance, risk_per_trade=risk, symbol=symbol)
     engine = TradeEngine(
@@ -86,6 +88,8 @@ def run_backtest(symbol: str, preset: dict) -> dict:
             engine.on_htf_candle(row)
             htf_i += 1
         engine.on_ltf_candle(ltf_row)
+
+    print(f"[BT:{symbol}] Replay done — building summary", flush=True)
 
     # Build summary
     b      = broker
