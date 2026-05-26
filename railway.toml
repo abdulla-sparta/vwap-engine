@@ -1,7 +1,7 @@
 [build]
 builder = "nixpacks"
 [deploy]
-startCommand = "gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app"
+startCommand = "gunicorn --worker-class gthread --threads 4 -w 1 --bind 0.0.0.0:$PORT --timeout 120 app:app"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 [[mounts]]
