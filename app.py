@@ -111,6 +111,7 @@ def _start_live_runner():
                         "connected":        connected,
                         "portfolio_equity": portfolio,
                         "instruments":      instruments,
+                        "entries_blocked":  getattr(runner, "_entries_blocked", False),
                     })
                 except Exception:
                     pass
@@ -625,6 +626,56 @@ def api_reset_kill_switch():
     return jsonify({"error": f"{symbol} not found"}), 404
 
 
+@app.route("/reset_cooldown", methods=["POST"])
+def api_reset_cooldown():
+    """
+    Reset entry cooldown for a symbol (or ALL) so it can take entries immediately.
+    POST body: { "symbol": "NIFTY" }  or  { "symbol": "ALL" }
+    """
+    if not live_runner:
+        return jsonify({"error": "Engine not running"}), 400
+    data   = request.get_json(silent=True) or {}
+    symbol = data.get("symbol", "").upper()
+    if not symbol:
+        return jsonify({"error": "symbol required"}), 400
+
+    reset_symbols = []
+    for runner in live_runner.runners.values():
+        if symbol == "ALL" or runner.symbol == symbol:
+            eng = runner.engine
+            eng.last_entry_index = eng.index - eng.cooldown_candles
+            reset_symbols.append(runner.symbol)
+            print(f"[App] Cooldown reset for {runner.symbol}")
+
+    if not reset_symbols:
+        return jsonify({"error": f"{symbol} not found"}), 404
+
+    return jsonify({
+        "status":  "ok",
+        "symbols": reset_symbols,
+        "message": f"Cooldown reset for: {', '.join(reset_symbols)}",
+    })
+
+
+@app.route("/toggle_entries", methods=["POST"])
+def api_toggle_entries():
+    """
+    Master entry block toggle. POST {} to flip, or POST {"block": true/false} to set.
+    Blocks all new entries across all symbols without stopping the engine.
+    """
+    if not live_runner:
+        return jsonify({"error": "Engine not running"}), 400
+    data = request.get_json(silent=True) or {}
+    if "block" in data:
+        live_runner._entries_blocked = bool(data["block"])
+    else:
+        live_runner._entries_blocked = not getattr(live_runner, "_entries_blocked", False)
+    state = "BLOCKED" if live_runner._entries_blocked else "ALLOWED"
+    print(f"[App] Master entries {state} via /toggle_entries")
+    return jsonify({"status": "ok", "entries_blocked": live_runner._entries_blocked,
+                    "message": f"New entries {state} across all symbols"})
+
+
 @app.route("/close_position", methods=["POST"])
 def api_close_position():
     if not live_runner:
@@ -779,6 +830,7 @@ def on_connect(auth=None):
             "connected": connected,
             "portfolio_equity": portfolio,
             "instruments": instruments,
+            "entries_blocked": getattr(live_runner, "_entries_blocked", False),
         })
         if _signal_log:
             emit("signal_history", _signal_log)

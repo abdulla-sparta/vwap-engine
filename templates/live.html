@@ -150,6 +150,22 @@ table.ltl-table{width:100%;border-collapse:collapse;font-size:12px}
 
 .btn-reset-ks{padding:3px 10px;border-radius:5px;border:1px solid rgba(0,102,0,0.45);background:rgba(255,255,255,0.18);color:#fff;font-size:11px;font-weight:600;cursor:pointer;font-family:'DM Sans',sans-serif;transition:background .15s;white-space:nowrap;flex-shrink:0}
 .btn-reset-ks:hover{background:rgba(255,255,255,0.35)}
+.card-blocker{padding:10px 14px;border-bottom:1px solid var(--border);font-size:11px;display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.blocker-inner{display:flex;align-items:flex-start;gap:7px;flex:1}
+.blocker-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:3px}
+.blocker-label{font-weight:600;margin-bottom:2px}
+.blocker-detail{color:var(--muted);font-size:10px;line-height:1.4}
+.blocker-green{background:rgba(22,163,74,.06)}.blocker-green .blocker-dot{background:var(--green)}.blocker-green .blocker-label{color:var(--green)}
+.blocker-amber{background:rgba(217,119,6,.06)}.blocker-amber .blocker-dot{background:#d97706}.blocker-amber .blocker-label{color:#92400e}
+.blocker-red{background:#fff5f5}.blocker-red .blocker-dot{background:var(--red)}.blocker-red .blocker-label{color:var(--red)}
+.blocker-blue{background:rgba(15,111,255,.06)}.blocker-blue .blocker-dot{background:var(--blue)}.blocker-blue .blocker-label{color:var(--blue)}
+.btn-reset-cd{padding:3px 10px;border-radius:5px;border:1px solid #d97706;background:transparent;color:#d97706;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:'DM Sans',sans-serif}
+.btn-reset-cd:hover{background:#fef3c7}
+.btn-reset-all-cd{font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid #d97706;color:#d97706;background:transparent;cursor:pointer;font-weight:500;font-family:'DM Sans',sans-serif}
+.btn-reset-all-cd:hover{background:#fef3c7}
+.btn-master-block{font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid #dc2626;color:#dc2626;background:transparent;cursor:pointer;font-weight:500;font-family:'DM Sans',sans-serif}
+.btn-master-block:hover{background:#fee2e2}
+.btn-master-block.blocking{background:#dc2626;color:#fff}
 #ks-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.2);transition:opacity .3s;pointer-events:none}
 </style>
 </head>
@@ -185,6 +201,8 @@ table.ltl-table{width:100%;border-collapse:collapse;font-size:12px}
   </div>
   <button class="btn btn-start" id="btnStart" onclick="startAll()">▶ Start All</button>
   <button class="btn" id="btnStop" onclick="stopEngine()" style="display:none;background:#dc2626;color:#fff;margin-left:8px">⏹ Stop Engine</button>
+  <button class="btn btn-master-block" id="btnMasterBlock" onclick="toggleMasterBlock()" title="Block or allow new entries across all symbols">⛔ Block Entries</button>
+  <button class="btn btn-reset-all-cd" onclick="resetAllCooldowns()" title="Reset cooldown for all symbols — allows immediate entries">⚡ Reset All Cooldowns</button>
 </div>
 
 <div class="port-bar">
@@ -322,6 +340,10 @@ socket.on('disconnect', ()=>setConn(false));
 
 socket.on('live_update', data=>{
   setConn(data.connected);
+  if(data.entries_blocked !== undefined && data.entries_blocked !== _entriesBlocked){
+    _entriesBlocked = data.entries_blocked;
+    updateMasterBlockBtn();
+  }
   if(data.instruments){
     engineRunning = true;
     startLtpPoll();
@@ -560,6 +582,33 @@ function cardHTML(symbol, d){
       </tr>`).join('')}</tbody>
     </table>`;
 
+  // ── Entry blocker status row ──────────────────────────────────────────────
+  const blk = d?.entry_blocker ?? null;
+  const blockerHTML = blk ? (() => {
+    const sev = blk.severity || 'amber';
+    const cdBtn = blk.code === 'COOLDOWN'
+      ? `<button class="btn-reset-cd" onclick="resetCooldown('${symbol}', event)">⚡ Reset</button>`
+      : '';
+    return `<div class="card-blocker blocker-${sev}">
+      <div class="blocker-inner">
+        <div class="blocker-dot"></div>
+        <div>
+          <div class="blocker-label">${blk.label}</div>
+          <div class="blocker-detail">${blk.detail}</div>
+        </div>
+      </div>
+      ${cdBtn}
+    </div>`;
+  })() : `<div class="card-blocker blocker-amber">
+    <div class="blocker-inner">
+      <div class="blocker-dot"></div>
+      <div>
+        <div class="blocker-label">Waiting for data...</div>
+        <div class="blocker-detail">Engine status not yet received</div>
+      </div>
+    </div>
+  </div>`;
+
   return `
     <div class="card-head">
       <div>
@@ -589,6 +638,7 @@ function cardHTML(symbol, d){
       <div class="pnl-cell"><div class="pnl-label">Net</div><div class="pnl-val ${cls(net)}">${fmtP(net)}</div></div>
     </div>
     <div class="card-pos">${posHTML}</div>
+    ${blockerHTML}
     <div class="card-kill ${killed?'kill-fired':ks?'kill-active':'kill-off'}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         <span>${killTxt}</span>
@@ -689,6 +739,84 @@ function closeLTL(e){ if(e.target===document.getElementById('ltlOverlay')) close
 function closeLTLBtn(){ document.getElementById('ltlOverlay').classList.remove('open'); document.body.style.overflow=''; }
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeLTLBtn(); });
 
+// ── Master entry block ────────────────────────────────────────────────────────
+let _entriesBlocked = false;
+
+function updateMasterBlockBtn() {
+  const btn = document.getElementById('btnMasterBlock');
+  if (!btn) return;
+  if (_entriesBlocked) {
+    btn.textContent = '⛔ Entries BLOCKED';
+    btn.classList.add('blocking');
+    btn.title = 'Click to allow entries';
+  } else {
+    btn.textContent = '⛔ Block Entries';
+    btn.classList.remove('blocking');
+    btn.title = 'Click to block all new entries';
+  }
+}
+
+async function toggleMasterBlock() {
+  try {
+    const res  = await fetch('/toggle_entries', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'});
+    const data = await res.json();
+    if (data.status === 'ok') {
+      _entriesBlocked = data.entries_blocked;
+      updateMasterBlockBtn();
+      showToast(_entriesBlocked
+        ? '⛔ Entries BLOCKED — no new trades will be taken'
+        : '✅ Entries ALLOWED — engine scanning normally',
+        _entriesBlocked ? '#dc2626' : '#16a34a');
+    } else {
+      showToast('❌ ' + (data.error || 'Toggle failed'), '#dc2626');
+    }
+  } catch(e) { console.error('toggleMasterBlock error:', e); }
+}
+
+function showToast(msg, bg) {
+  let t = document.getElementById('ks-toast');
+  if (!t) { t = document.createElement('div'); t.id='ks-toast'; document.body.appendChild(t); }
+  t.textContent = msg;
+  t.style.cssText = `position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+    background:${bg};color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;
+    font-weight:600;z-index:9999;opacity:1;transition:opacity .4s;white-space:nowrap`;
+  clearTimeout(t._t);
+  t._t = setTimeout(() => { t.style.opacity = '0'; }, 3500);
+}
+
+async function resetCooldown(symbol, e) {
+  if (e) e.stopPropagation();
+  try {
+    const res  = await fetch('/reset_cooldown', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({symbol})
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      showToast('⚡ Cooldown reset for ' + symbol + ' — entries allowed immediately', '#d97706');
+    } else {
+      showToast('❌ ' + (data.error || 'Reset failed'), '#dc2626');
+    }
+  } catch(err) { console.error('resetCooldown error:', err); }
+}
+
+async function resetAllCooldowns() {
+  if (!confirm('Reset cooldown for ALL symbols?\nThis allows immediate entries on every symbol.')) return;
+  try {
+    const res  = await fetch('/reset_cooldown', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({symbol: 'ALL'})
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      showToast('⚡ Cooldown reset for all symbols — ' + data.message, '#d97706');
+    } else {
+      showToast('❌ ' + (data.error || 'Reset failed'), '#dc2626');
+    }
+  } catch(err) { console.error('resetAllCooldowns error:', err); }
+}
+
 async function resetKillSwitch(symbol) {
   if (!confirm('Reset kill switch for ' + symbol + '?\nThis will allow new entries and is saved permanently.')) return;
   try {
@@ -697,20 +825,11 @@ async function resetKillSwitch(symbol) {
       body: JSON.stringify({symbol})
     });
     const data = await res.json();
-    const toast = document.getElementById('ks-toast') || (() => {
-      const t = document.createElement('div'); t.id='ks-toast';
-      document.body.appendChild(t); return t;
-    })();
     if (data.status === 'ok') {
-      toast.textContent = '✅ Kill switch reset for ' + symbol + ' — saved to DB';
-      toast.style.background = '#16a34a';
+      showToast('✅ Kill switch reset for ' + symbol, '#16a34a');
     } else {
-      toast.textContent = '❌ ' + (data.error || 'Reset failed');
-      toast.style.background = '#dc2626';
+      showToast('❌ ' + (data.error || 'Reset failed'), '#dc2626');
     }
-    toast.style.opacity = '1';
-    clearTimeout(toast._t);
-    toast._t = setTimeout(() => { toast.style.opacity = '0'; }, 3500);
   } catch(e) {
     console.error('resetKillSwitch error:', e);
   }

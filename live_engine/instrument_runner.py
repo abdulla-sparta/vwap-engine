@@ -185,7 +185,103 @@ class InstrumentRunner:
                 "current":   round(b.get_equity(ltp or b.balance), 2),
                 "percent":   CONFIG.get("kill_switch_percent", 0.90),
             },
+            "entry_blocker": self._get_entry_blocker(),
         }
+
+    def _get_entry_blocker(self) -> dict:
+        """
+        Returns the single most important reason entries are blocked right now.
+        Priority matches the guard sequence in trade_engine.on_ltf_candle().
+        Used by the live dashboard card to show exactly why no trade is being taken.
+        """
+        eng = self.engine
+        b   = self.broker
+
+        from datetime import datetime, timezone, timedelta
+        _IST = timezone(timedelta(hours=5, minutes=30))
+        _now_ist = datetime.now(_IST)
+        _weekday = _now_ist.weekday()  # 0=Mon … 4=Fri, 5=Sat, 6=Sun
+
+        from config import CONFIG as _cfg
+        from engine.session import is_entry_allowed, is_force_exit_time
+        _entry_start = _cfg.get("entry_start_time", "09:20")
+        _entry_end   = _cfg.get("entry_end_time",   "14:30")
+
+        # Guard 0 — weekend
+        if _weekday >= 5:
+            return {"code": "OUTSIDE_WINDOW",
+                    "label": f"Outside trading window — {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][_weekday]}",
+                    "detail": f"NSE is closed on weekends. Engine resumes Monday at {_entry_start} IST.",
+                    "severity": "amber"}
+
+        # Guard — master entries blocked
+        try:
+            from app import live_runner as _lr
+            if _lr and getattr(_lr, "_entries_blocked", False):
+                return {"code": "ENTRIES_BLOCKED",
+                        "label": "Entries manually blocked",
+                        "detail": "Master block is ON — click ⛔ Block Entries button to re-enable.",
+                        "severity": "red"}
+        except Exception:
+            pass
+
+        # Guard 1 — kill switch
+        if eng.kill_switch_triggered:
+            return {"code": "KILL_SWITCH", "label": "Kill switch fired",
+                    "detail": f"Peak ₹{round(eng.equity_peak):,} hit 90% threshold — reset to re-enable",
+                    "severity": "red"}
+
+        # Guard 2 — open position
+        if b.position:
+            side = b.position.get("side", "")
+            return {"code": "IN_POSITION", "label": f"In position ({side})",
+                    "detail": f"Entry ₹{b.position.get('entry_price',0)}  SL ₹{b.position.get('stop',0)}  T ₹{b.position.get('target',0)}",
+                    "severity": "blue"}
+
+        # Guard 3 — no HTF bias yet
+        if not eng.current_bias:
+            return {"code": "NO_BIAS", "label": "Waiting for BOS",
+                    "detail": "No Break of Structure detected yet on 15m — engine watching for swing pivot break",
+                    "severity": "amber"}
+
+        # Guard 4 — session time filter
+        _now_time = _now_ist.time()
+        if is_force_exit_time(_now_time):
+            return {"code": "FORCE_EXIT_TIME", "label": "After 15:25 — session closed",
+                    "detail": "Force-exit window — no new entries, existing positions being closed",
+                    "severity": "red"}
+        if not is_entry_allowed(_now_time):
+            return {"code": "SESSION_FILTER", "label": f"Outside entry window ({_entry_start}–{_entry_end})",
+                    "detail": f"Current IST: {_now_time.strftime('%H:%M')} — entries only allowed {_entry_start} to {_entry_end}",
+                    "severity": "amber"}
+
+        # Guard 5 — cooldown
+        candles_done = eng.index - eng.last_entry_index
+        if candles_done < eng.cooldown_candles:
+            remaining = eng.cooldown_candles - candles_done
+            return {"code": "COOLDOWN", "label": f"Cooldown — {remaining} candles left",
+                    "detail": f"{candles_done}/{eng.cooldown_candles} 5m candles since last entry — waiting {remaining} more (~{remaining*5}m)",
+                    "severity": "amber"}
+
+        # Guard 6 — replay mode
+        if eng.replay_mode:
+            return {"code": "REPLAY", "label": "Startup replay in progress",
+                    "detail": "Replaying today's historical candles to build VWAP — live entries resume after",
+                    "severity": "amber"}
+
+        # Guard 7 — VWAP not ready
+        if not eng.vwap or not eng.vwap.is_ready:
+            return {"code": "VWAP_NOT_READY", "label": "VWAP not ready",
+                    "detail": "Waiting for enough candles to compute VWAP bands — will be ready shortly",
+                    "severity": "amber"}
+
+        # All clear
+        bias = eng.current_bias
+        bias_arrow = "▲" if bias == "BULLISH" else "▼"
+        bias_label = "bullish" if bias == "BULLISH" else "bearish"
+        return {"code": "READY", "label": f"{bias_arrow} {bias} — scanning for {bias_label} VWAP entry",
+                "detail": "Watching for VWAP band touch + HTF bias confluence to trigger entry",
+                "severity": "green"}
 
     def get_trades(self) -> list:
         return self.broker.trade_log
